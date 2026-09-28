@@ -257,7 +257,7 @@ function NavDrawer({ open, onClose, current, inbox }: { open: boolean; onClose: 
     return () => window.removeEventListener("keydown", k);
   }, [open, onClose]);
   return (
-    <div className={clsx("fixed inset-0 z-50 lg:hidden", !open && "pointer-events-none")} aria-hidden={!open}>
+    <div className={clsx("fixed inset-0 z-50 lg:hidden", !open && "pointer-events-none")} aria-hidden={!open} inert={!open}>
       <div className={clsx("absolute inset-0 bg-black/40 transition-opacity", open ? "opacity-100" : "opacity-0")} onClick={onClose} />
       <aside
         ref={panelRef}
@@ -301,7 +301,11 @@ export function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-center gap-2 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 px-2 py-1.5 lg:gap-3 lg:px-4 lg:py-2">
-        <button onClick={() => setMenu(true)} className="relative rounded-md p-2 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 lg:hidden" aria-label="Menu">
+        <button
+          onClick={() => setMenu(true)}
+          className="relative rounded-md p-2 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 lg:hidden"
+          aria-label="Menu"
+        >
           <Menu size={18} />
           {!!inbox.data && <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-amber-500" />}
         </button>
