@@ -1993,6 +1993,8 @@ export interface components {
             default_role_agents: {
                 [key: string]: string;
             };
+            /** @description Whether agents may run outside a container (`serve --dangerously-allow-host-agents`). Read-only. */
+            host_agents_allowed: boolean;
             /**
              * Format: int64
              * @description Global cap on simultaneously executing agent runs.

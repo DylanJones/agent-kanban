@@ -370,3 +370,25 @@ async fn session_settings_apply_defaults_and_role_overrides() {
     let a = agent(&env, "f-triage").await;
     assert_eq!(a.config_options.unwrap().0.as_array().unwrap().len(), 3);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn host_agents_need_the_flag_without_a_container() {
+    let env = setup().await;
+    fake_agent(&env.app, "f-noop", "noop", "fake").await;
+    let i = new_issue(&env, "Anything", IssueState::Ready).await;
+    let a = agent(&env, "f-noop").await;
+    // The server was started without --dangerously-allow-host-agents and the project has no container.
+    let mut config = (*env.app.config).clone();
+    config.allow_host_agents = false;
+    let app = agent_kanban::AppState { config: std::sync::Arc::new(config), ..env.app.clone() };
+
+    let err = scheduler::start_run(&app, &env.project, &i, Role::Fix, &a).await.unwrap_err();
+    assert!(err.to_string().contains("--dangerously-allow-host-agents"), "{err}");
+    let avail = scheduler::role_availability(&app, &env.project).await.unwrap();
+    let step = scheduler::next_step(&i, None, false, &avail, &agent_kanban::db::now());
+    assert_eq!((step.kind.as_str(), step.label.as_str()), ("blocked", "Needs a container"));
+    // Nothing is dispatched automatically either.
+    scheduler::tick(&app).await.unwrap();
+    let runs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_runs").fetch_one(&app.db).await.unwrap();
+    assert_eq!(runs, 0);
+}

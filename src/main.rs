@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -25,6 +26,11 @@ enum Cmd {
         /// Treat unauthenticated requests as the admin (local development only).
         #[arg(long)]
         no_auth: bool,
+        /// Let agents run directly on this machine, with your user's access to files, keys and
+        /// network, for projects that don't run agents in a Docker container. Without it, those
+        /// projects' agents don't run.
+        #[arg(long, env = "AKB_DANGEROUSLY_ALLOW_HOST_AGENTS")]
+        dangerously_allow_host_agents: bool,
         /// Also dispatch agents automatically (same as the scheduler switch in the UI).
         #[arg(long)]
         scheduler: bool,
@@ -72,19 +78,22 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let cli = Cli::parse();
     let default_bind: SocketAddr = std::env::var("AKB_BIND").ok().and_then(|b| b.parse().ok()).unwrap_or(([127, 0, 0, 1], 7878).into());
-    match cli.cmd.unwrap_or(Cmd::Serve { bind: default_bind, no_auth: false, scheduler: false }) {
-        Cmd::Serve { bind, no_auth, scheduler } => {
+    match cli.cmd.unwrap_or(Cmd::Serve { bind: default_bind, no_auth: false, dangerously_allow_host_agents: false, scheduler: false }) {
+        Cmd::Serve { bind, no_auth, dangerously_allow_host_agents, scheduler } => {
             if no_auth && !bind.ip().is_loopback() {
                 anyhow::bail!("--no-auth is only allowed on a loopback address (e.g. 127.0.0.1); {bind} would expose the board without a login");
             }
-            let config = Config::load(cli.data_dir, bind, no_auth)?;
+            let mut config = Config::load(cli.data_dir, bind, no_auth)?;
+            config.allow_host_agents = dangerously_allow_host_agents;
+            // Before touching the database: refuse a second server on the same data or port.
+            let _lock = config.lock_for_serve()?;
+            let listener = tokio::net::TcpListener::bind(bind).await.with_context(|| format!("binding {bind}"))?;
             let login = format!("{}/login?t={}", config.public_url, config.secrets.admin_token);
             let app = AppState::new(config).await?;
             if scheduler {
                 agent_kanban::db::set_setting(&app.db, "scheduler_enabled", &true).await?;
             }
             app.start_background().await?;
-            let listener = tokio::net::TcpListener::bind(bind).await?;
             tracing::info!("agent-kanban listening on http://{bind}");
             println!("\n  Open: {login}\n  API docs: {}/api/docs", app.config.public_url);
             if !bind.ip().is_loopback() {
@@ -100,6 +109,9 @@ async fn main() -> anyhow::Result<()> {
                     "  Reachable from other devices at http://{lan}:{port} (plain HTTP: log in there with the same link, host swapped)\n  Exposed beyond this machine: anyone who can log in can start agents and merge code.",
                     port = bind.port()
                 );
+            }
+            if app.config.allow_host_agents {
+                println!("  Host agents allowed: projects without a container run agents unsandboxed on this machine.");
             }
             println!();
             axum::serve(listener, api::app(app)).with_graceful_shutdown(shutdown()).await?;

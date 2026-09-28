@@ -233,11 +233,19 @@ Auth works like this:
 
 ## Containers
 
+Agents only run in Docker containers. A project without a container gets no agent runs: its
+cards say **Needs a container**, and **Run** is refused. To let agents run directly on this
+machine instead, with your user's files, keys and network, start the server with
+`serve --dangerously-allow-host-agents`. That's meant for when the server itself is already
+sandboxed, such as a test server inside an agent's container. The board server itself runs on
+the host, because it needs Docker.
+
 In **Project → Container sandbox**, provide a base Dockerfile with your toolchain, enable
 containers and press **Build image** (or run `agent-kanban build-image --project <slug>`). The
 Dockerfile shouldn't copy the source, because worktrees are mounted at run time.
 [`examples/emojicode/`](examples/emojicode) has the emojicode toolchain image (Clang/LLVM
-from apt.llvm.org, ccache, tree-sitter) and its host/container-agnostic setup script. agent-kanban adds an overlay on top that installs Node,
+from apt.llvm.org, ccache, tree-sitter) and its host/container-agnostic setup script.
+[`examples/agent-kanban/`](examples/agent-kanban) has the image agent-kanban uses to develop itself. agent-kanban adds an overlay on top that installs Node,
 git, curl, ccache and the ACP adapters, and creates a non-root user with your uid.
 
 Each run then executes `docker run --rm -i …`:

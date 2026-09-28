@@ -35,6 +35,9 @@ pub async fn setup() -> Env {
     let repo = tmp.path().join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "-b", "master"]);
+    // The server commits too (merges): don't depend on the machine having a git identity.
+    git(&repo, &["config", "user.name", "Test"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
     std::fs::write(repo.join("main.txt"), "one\ntwo\nthree\n").unwrap();
     std::fs::write(repo.join("fix.txt"), "start\n").unwrap();
     git(&repo, &["add", "-A"]);

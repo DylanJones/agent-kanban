@@ -44,6 +44,8 @@ impl AppState {
     /// A fresh data dir (and database) for tests, with the given externally reachable URL.
     pub async fn for_test(data_dir: &std::path::Path, public_url: &str) -> anyhow::Result<Self> {
         let mut config = Config::load(Some(data_dir.to_path_buf()), "127.0.0.1:0".parse().unwrap(), false)?;
+        // Tests drive the fake agent directly on the host.
+        config.allow_host_agents = true;
         config.public_url = public_url.to_string();
         Self::new(config).await
     }

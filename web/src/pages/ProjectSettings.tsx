@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { type Project, ROLE_LABEL, type Role, api, client, unwrap } from "../api/client";
 import { SettingSelects, agentOptions, settingLabel, valueName } from "../components/SessionSettings";
+import { useSettings } from "../components/Layout";
 import { Button, ErrorBox, Field, Pill, TimeAgo, inputCls } from "../components/ui";
 
 function Section({ title, children, desc }: { title: string; desc?: string; children: React.ReactNode }) {
@@ -129,6 +130,7 @@ export default function ProjectSettings() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["project"] }),
   });
   const importGh = useMutation({ mutationFn: () => api("POST", `/api/projects/${slug}/github/import`), onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }) });
+  const settings = useSettings();
   const build = useMutation({ mutationFn: () => api("POST", `/api/projects/${slug}/container/build`), onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }) });
   if (!p.data) return <ErrorBox error={p.error} />;
   const str = (k: keyof Project) => ({
@@ -197,6 +199,12 @@ export default function ProjectSettings() {
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" {...bool("container_enabled")} /> Run agents in containers
         </label>
+        {settings.data && !settings.data.host_agents_allowed && !p.data.container_enabled && (
+          <p className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
+            This project's agents won't run until containers are on: the server only runs agents in Docker. (Starting it with{" "}
+            <code>--dangerously-allow-host-agents</code> lets agents run unsandboxed on this machine.)
+          </p>
+        )}
         <Field label="Base Dockerfile (toolchain)" hint="An overlay adding Node, git, the ACP adapters and a non-root user is built on top.">
           <textarea className={clsx(inputCls, "font-mono text-xs h-40")} {...str("container_dockerfile")} />
         </Field>

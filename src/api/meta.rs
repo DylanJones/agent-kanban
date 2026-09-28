@@ -88,6 +88,8 @@ pub struct Settings {
     pub default_role_agents: std::collections::BTreeMap<String, String>,
     /// Consecutive failed runs before an issue is marked stalled.
     pub max_failures: i64,
+    /// Whether agents may run outside a container (`serve --dangerously-allow-host-agents`). Read-only.
+    pub host_agents_allowed: bool,
 }
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -108,6 +110,7 @@ pub async fn load_settings(app: &AppState) -> Settings {
         run_timeouts_minutes: db::get_setting(&app.db, "run_timeouts_minutes").await.unwrap_or_default(),
         default_role_agents: db::get_setting(&app.db, "default_role_agents").await.unwrap_or_default(),
         max_failures: db::get_setting(&app.db, "max_failures").await.unwrap_or(3),
+        host_agents_allowed: app.config.allow_host_agents,
     }
 }
 

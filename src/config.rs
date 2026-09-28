@@ -16,8 +16,15 @@ pub struct Config {
     pub container_url: String,
     /// Disable human auth (every request without a run token is treated as the admin).
     pub no_auth: bool,
+    /// Let agents run directly on this machine for projects without a container
+    /// (`serve --dangerously-allow-host-agents`). Off by default: agents only run in Docker.
+    pub allow_host_agents: bool,
     pub secrets: Secrets,
 }
+
+/// Why an agent run was refused for a project without a container.
+pub const HOST_AGENTS_OFF: &str = "agents only run in Docker containers: turn on \"Run agents in containers\" in the project's settings, \
+or start the server with --dangerously-allow-host-agents to let agents run unsandboxed on this machine";
 
 /// Contents of `secrets.toml` (mode 0600).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -45,7 +52,22 @@ impl Config {
         let host = if bind.ip().is_unspecified() || bind.ip().is_loopback() { "127.0.0.1".to_string() } else { bind.ip().to_string() };
         let public_url = format!("http://{host}:{}", bind.port());
         let container_url = format!("http://host.docker.internal:{}", bind.port());
-        Ok(Config { data_dir, bind, public_url, container_url, no_auth, secrets })
+        Ok(Config { data_dir, bind, public_url, container_url, no_auth, allow_host_agents: false, secrets })
+    }
+
+    /// Only one server may use a data directory: a second one would mark the first one's runs
+    /// interrupted and sweep its containers at startup. The lock is held until the returned value drops.
+    pub fn lock_for_serve(&self) -> anyhow::Result<ServeLock> {
+        use std::os::fd::AsRawFd;
+        let path = self.data_dir.join("serve.lock");
+        let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&path).with_context(|| format!("opening {}", path.display()))?;
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            anyhow::bail!(
+                "another agent-kanban server is already using {}; give this one its own data directory (--data-dir or AKB_DATA_DIR)",
+                self.data_dir.display()
+            );
+        }
+        Ok(ServeLock(file))
     }
 
     pub fn db_path(&self) -> PathBuf {
@@ -80,6 +102,8 @@ impl Config {
         format!("{}/api", self.public_url)
     }
 }
+
+pub struct ServeLock(#[allow(dead_code)] std::fs::File);
 
 pub fn default_data_dir() -> PathBuf {
     if let Ok(d) = std::env::var("AKB_DATA_DIR") {

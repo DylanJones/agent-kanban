@@ -54,6 +54,8 @@ pub enum RoleAvailability {
     MissingCredential { slug: String, what: String },
     /// Runs in a container but Docker isn't running.
     NoDocker { slug: String },
+    /// The project has no container and the server doesn't allow agents on the host.
+    HostAgentsOff { slug: String },
     Paused { slug: String, kind: String, until: Option<String> },
     Unassigned,
 }
@@ -66,6 +68,7 @@ pub async fn role_availability(app: &AppState, project: &Project) -> anyhow::Res
         let avail = match agent_for(app, project, role).await? {
             None => RoleAvailability::Unassigned,
             Some(a) if !a.enabled => RoleAvailability::Disabled { slug: a.slug },
+            Some(a) if !project.container_enabled && !app.config.allow_host_agents => RoleAvailability::HostAgentsOff { slug: a.slug },
             Some(a) if a.needs_auth => RoleAvailability::NeedsAuth { slug: a.slug },
             Some(a) if docker_down => RoleAvailability::NoDocker { slug: a.slug },
             Some(a)
@@ -167,6 +170,12 @@ pub fn next_step(
                 slug,
             )
         },
+        RoleAvailability::HostAgentsOff { slug } => base(
+            "blocked",
+            "Needs a container".into(),
+            Some("Agents only run in Docker. Turn on \"Run agents in containers\" in Project settings (or start the server with --dangerously-allow-host-agents).".into()),
+            slug,
+        ),
         RoleAvailability::NoDocker { slug } => base(
             "waiting",
             format!("{} · waiting for Docker", role_title(role)),
@@ -287,6 +296,9 @@ pub async fn tick(app: &AppState) -> anyhow::Result<()> {
 pub async fn start_run(app: &AppState, project: &Project, issue: &Issue, role: Role, agent: &AgentDefinition) -> ApiResult<AgentRun> {
     if issue.state == IssueState::Done || issue.state == IssueState::Closed {
         return Err(ApiError::conflict("issue is closed"));
+    }
+    if !project.container_enabled && !app.config.allow_host_agents {
+        return Err(ApiError::conflict(crate::config::HOST_AGENTS_OFF));
     }
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO agent_runs(project_id, issue_id, role, agent_definition_id, status, created_at) VALUES (?, ?, ?, ?, 'queued', ?) RETURNING id",
