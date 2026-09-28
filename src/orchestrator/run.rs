@@ -875,6 +875,8 @@ async fn execute_inner(
         let mut in_turn = true;
         let mut nudges = 0;
         let mut drive = drive;
+        // A JoinHandle panics if polled again after it completed.
+        let mut drive_done = false;
         let mut turn_error: Option<AcpError>;
 
         let outcome = loop {
@@ -887,6 +889,7 @@ async fn execute_inner(
                             Ok(Err(e)) => Some(e),
                             _ => None,
                         };
+                        drive_done = true;
                         if cancel.is_cancelled() {
                             break Outcome::Cancelled(cancel_reason.lock().unwrap().clone().unwrap_or_else(|| "cancelled".into()));
                         }
@@ -1004,7 +1007,7 @@ async fn execute_inner(
         };
         let _ = ctl_tx.send(Ctl::Close);
         drop(ctl_tx);
-        if tokio::time::timeout(Duration::from_secs(10), &mut drive).await.is_err() {
+        if !drive_done && tokio::time::timeout(Duration::from_secs(10), &mut drive).await.is_err() {
             drive.abort();
         }
         tr.flush().await;

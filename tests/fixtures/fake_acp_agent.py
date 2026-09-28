@@ -12,6 +12,7 @@ Behaviour is chosen by FAKE_MODE and uses the board API via $AKB_API / $AKB_AUTH
   noop            reply with text only (never records an outcome)
   limit           fail the prompt with a Claude-style usage-limit error
   hang            never finish the turn (until cancelled)
+  crash           exit while the session is being created
 """
 import json
 import os
@@ -166,6 +167,8 @@ def main():
         if m == "initialize":
             send({"jsonrpc": "2.0", "id": msg["id"], "result": {"protocolVersion": 1, "agentCapabilities": {}, "authMethods": [], "agentInfo": {"name": "fake", "version": "0"}}})
         elif m == "session/new":
+            if MODE == "crash":
+                os._exit(3)
             send({"jsonrpc": "2.0", "id": msg["id"], "result": {"sessionId": "s1", "modes": {"currentModeId": "default", "availableModes": [{"id": "default", "name": "Default"}]}, "configOptions": CONFIG}})
         elif m == "session/set_config_option":
             for o in CONFIG:

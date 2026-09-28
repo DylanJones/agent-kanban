@@ -392,3 +392,15 @@ async fn host_agents_need_the_flag_without_a_container() {
     let runs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_runs").fetch_one(&app.db).await.unwrap();
     assert_eq!(runs, 0);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn agent_crash_before_its_turn_fails_the_run_cleanly() {
+    let env = setup().await;
+    fake_agent(&env.app, "f-crash", "crash", "fake").await;
+    let i = new_issue(&env, "Crashes", IssueState::Ready).await;
+    // The run task used to panic here (its JoinHandle was awaited twice), leaving the run active.
+    let r = run(&env, i.number, Role::Fix, "f-crash").await;
+    assert_eq!(r.status, "failed");
+    assert!(r.error.as_deref().unwrap_or("").contains("session ended"), "{:?}", r.error);
+    assert_eq!(issue(&env, i.number).await.failure_count, 1);
+}
