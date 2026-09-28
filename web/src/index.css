@@ -1,0 +1,123 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 antialiased;
+}
+
+.prose-sm {
+  @apply text-sm leading-relaxed;
+}
+.prose-sm p {
+  @apply my-2;
+}
+.prose-sm p:first-child {
+  @apply mt-0;
+}
+.prose-sm p:last-child {
+  @apply mb-0;
+}
+.prose-sm ul {
+  @apply list-disc pl-5 my-2;
+}
+.prose-sm ol {
+  @apply list-decimal pl-5 my-2;
+}
+.prose-sm h1,
+.prose-sm h2,
+.prose-sm h3 {
+  @apply font-semibold mt-3 mb-1;
+}
+.prose-sm code {
+  @apply font-mono text-[0.85em] bg-zinc-100 dark:bg-zinc-800 rounded px-1 py-0.5;
+}
+.prose-sm pre {
+  @apply bg-zinc-100 dark:bg-zinc-900 rounded-md p-3 overflow-x-auto my-2 text-xs;
+}
+.prose-sm pre code {
+  @apply bg-transparent p-0;
+}
+.prose-sm a {
+  @apply text-blue-600 dark:text-blue-400 underline;
+}
+.prose-sm blockquote {
+  @apply border-l-2 border-zinc-300 dark:border-zinc-700 pl-3 text-zinc-600 dark:text-zinc-400;
+}
+.prose-sm table {
+  @apply text-xs my-2;
+}
+.prose-sm th,
+.prose-sm td {
+  @apply border border-zinc-200 dark:border-zinc-800 px-2 py-1;
+}
+
+/* react-diff-view */
+.diff {
+  @apply w-full font-mono text-xs border-collapse;
+  table-layout: fixed;
+}
+.diff-gutter-col {
+  width: 3.5rem;
+}
+.diff-gutter {
+  @apply text-right pr-2 text-zinc-400 select-none cursor-pointer align-top;
+}
+.diff-gutter:hover {
+  @apply text-blue-600 bg-blue-50 dark:bg-blue-950;
+}
+.diff-code {
+  @apply whitespace-pre-wrap break-all pl-2 align-top;
+}
+.diff-hunk-header {
+  @apply bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300;
+}
+.diff-hunk-header-content {
+  @apply px-2 py-1;
+}
+.diff-widget-content {
+  @apply p-0;
+}
+
+.diff {
+  --diff-background-color: transparent;
+  --diff-text-color: inherit;
+  --diff-font-family: var(--font-mono);
+  --diff-code-insert-background-color: #e6ffec;
+  --diff-gutter-insert-background-color: #ccffd8;
+  --diff-code-delete-background-color: #ffebe9;
+  --diff-gutter-delete-background-color: #ffd7d5;
+  --diff-code-selected-background-color: #fff8c5;
+  --diff-gutter-selected-background-color: #fff1a8;
+}
+
+@media (prefers-color-scheme: dark) {
+  .diff {
+    --diff-code-insert-background-color: rgb(46 160 67 / 0.15);
+    --diff-gutter-insert-background-color: rgb(63 185 80 / 0.3);
+    --diff-code-insert-edit-background-color: rgb(46 160 67 / 0.4);
+    --diff-code-insert-text-color: #e6edf3;
+    --diff-gutter-insert-text-color: #e6edf3;
+    --diff-code-delete-background-color: rgb(248 81 73 / 0.1);
+    --diff-gutter-delete-background-color: rgb(248 81 73 / 0.3);
+    --diff-code-delete-edit-background-color: rgb(248 81 73 / 0.4);
+    --diff-code-delete-text-color: #e6edf3;
+    --diff-gutter-delete-text-color: #e6edf3;
+    --diff-code-selected-background-color: rgb(187 128 9 / 0.25);
+    --diff-gutter-selected-background-color: rgb(187 128 9 / 0.4);
+    --diff-omit-gutter-line-color: #30363d;
+  }
+}
