@@ -247,9 +247,7 @@ export default function UsagePage() {
     <div className="mx-auto max-w-6xl p-6 space-y-5">
       <style>{`
         .viz-root, .usage-page { --series-1:#2a78d6; --series-2:#eb6834; --series-3:#1baf7a; --series-4:#eda100; --series-5:#e87ba4; --series-6:#008300; --text-primary:#0b0b0b; --text-secondary:#52514e; }
-        @media (prefers-color-scheme: dark) {
-          .viz-root, .usage-page { --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70; --series-4:#c98500; --series-5:#d55181; --series-6:#008300; --text-primary:#ffffff; --text-secondary:#c3c2b7; }
-        }
+        .dark .viz-root, .dark .usage-page { --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70; --series-4:#c98500; --series-5:#d55181; --series-6:#008300; --text-primary:#ffffff; --text-secondary:#c3c2b7; }
       `}</style>
       <div className="usage-page space-y-5">
         <div className="flex items-center gap-3">

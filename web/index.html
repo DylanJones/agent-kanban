@@ -5,6 +5,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗂️</text></svg>" />
     <title>agent-kanban</title>
+    <script>
+      // Applies the persisted theme before first paint, so there's no flash of the wrong theme.
+      // Keep in sync with THEME_STORAGE_KEY / applyTheme in src/theme.ts.
+      (function () {
+        var v = null;
+        try {
+          v = localStorage.getItem("akb-theme");
+        } catch (e) {}
+        var pref = v === "light" || v === "dark" ? v : "system";
+        var dark = pref === "dark" || (pref === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.classList.toggle("dark", dark);
+        document.documentElement.style.colorScheme = dark ? "dark" : "light";
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

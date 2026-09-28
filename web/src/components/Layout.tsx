@@ -1,12 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { BarChart3, Bot, BookOpen, Inbox, KanbanSquare, Menu, Play, Settings2, Square, Terminal, X } from "lucide-react";
+import { BarChart3, Bot, BookOpen, Inbox, KanbanSquare, Menu, Play, Settings, Settings2, Square, Terminal, X } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { Link, NavLink, useLocation, useNavigate, useParams } from "react-router";
 import { ApiError, ROLE_LABEL, type RunView, api, client, unwrap } from "../api/client";
 import { useLiveEvents } from "../api/live";
+import { useThemePreference } from "../theme";
+import { BrowserSettingsModal } from "./BrowserSettings";
 import { ConnectClaudeModal } from "./ConnectClaude";
-import { Button, inputCls } from "./ui";
+import { Button, FOCUSABLE_SELECTOR, inputCls } from "./ui";
 
 export function useProjects() {
   return useQuery({ queryKey: ["projects"], queryFn: () => unwrap(client.GET("/api/projects")) });
@@ -200,8 +202,6 @@ function LiveDot({ connected }: { connected: boolean }) {
   );
 }
 
-const FOCUSABLE_SELECTOR = 'a[href], button:not([disabled]), select:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
 /** Small screens: the nav lives in a drawer that slides in from the left. */
 function NavDrawer({ open, onClose, current, inbox }: { open: boolean; onClose: () => void; current?: string; inbox?: number }) {
   const { pathname } = useLocation();
@@ -298,6 +298,8 @@ export function Layout({ children }: { children: ReactNode }) {
   const inbox = useInboxCount(current);
   const [menu, setMenu] = useState(false);
   const closeMenu = useCallback(() => setMenu(false), []);
+  const [theme, setTheme] = useThemePreference();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-center gap-2 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 px-2 py-1.5 lg:gap-3 lg:px-4 lg:py-2">
@@ -324,6 +326,14 @@ export function Layout({ children }: { children: ReactNode }) {
           <a href="/api/docs" target="_blank" className="hidden lg:flex text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 text-xs items-center gap-1">
             <BookOpen size={13} /> API
           </a>
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+            aria-label="Browser settings"
+            title="Browser settings"
+          >
+            <Settings size={15} />
+          </button>
           <LiveDot connected={connected} />
         </div>
       </header>
@@ -331,6 +341,7 @@ export function Layout({ children }: { children: ReactNode }) {
       <main className="min-h-0 flex-1 overflow-auto">{children}</main>
       <RunToasts />
       <ConnectClaudeModal />
+      <BrowserSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} theme={theme} onThemeChange={setTheme} />
     </div>
   );
 }

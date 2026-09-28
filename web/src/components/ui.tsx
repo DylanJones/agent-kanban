@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import { X } from "lucide-react";
-import { type ButtonHTMLAttributes, type ReactNode, useEffect, useState } from "react";
+import { type ButtonHTMLAttributes, type ReactNode, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { HOLD_LABEL, type Hold, type IssueState, STATE_LABEL } from "../api/client";
@@ -132,10 +132,49 @@ export function Spinner({ className }: { className?: string }) {
   return <span className={clsx("inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent", className)} />;
 }
 
+export const FOCUSABLE_SELECTOR = 'a[href], button:not([disabled]), select:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 export function Modal({ open, onClose, title, children, wide }: { open: boolean; onClose: () => void; title: ReactNode; children: ReactNode; wide?: boolean }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const previouslyFocused = useRef<HTMLElement | null>(null);
+  // Move focus into the dialog when it opens, and restore it when it closes, so it never lingers
+  // on (or returns to) a trigger that's now obscured by the backdrop.
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (open) {
+      previouslyFocused.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const focusable = panel ? Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter((el) => el.offsetParent !== null) : [];
+      (focusable[0] ?? panel)?.focus();
+    } else if (previouslyFocused.current?.isConnected) {
+      previouslyFocused.current.focus();
+      previouslyFocused.current = null;
+    }
+  }, [open]);
   useEffect(() => {
     if (!open) return;
-    const k = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const k = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab" || !panelRef.current) return;
+      // Trap Tab/Shift+Tab inside the open dialog so it can't escape into the obscured page behind it.
+      const focusable = Array.from(panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter((el) => el.offsetParent !== null);
+      if (focusable.length === 0) return;
+      const [firstEl, lastEl] = [focusable[0], focusable[focusable.length - 1]];
+      if (!panelRef.current.contains(document.activeElement)) {
+        e.preventDefault();
+        (e.shiftKey ? lastEl : firstEl).focus();
+        return;
+      }
+      if (e.shiftKey && document.activeElement === firstEl) {
+        e.preventDefault();
+        lastEl.focus();
+      } else if (!e.shiftKey && document.activeElement === lastEl) {
+        e.preventDefault();
+        firstEl.focus();
+      }
+    };
     window.addEventListener("keydown", k);
     return () => window.removeEventListener("keydown", k);
   }, [open, onClose]);
@@ -143,12 +182,17 @@ export function Modal({ open, onClose, title, children, wide }: { open: boolean;
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 pt-[10vh]" onMouseDown={onClose}>
       <div
+        ref={panelRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label={typeof title === "string" ? title : undefined}
         className={clsx("w-full rounded-lg bg-white dark:bg-zinc-900 shadow-xl border border-zinc-200 dark:border-zinc-800", wide ? "max-w-3xl" : "max-w-lg")}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 px-4 py-3">
           <h2 className="font-semibold">{title}</h2>
-          <button onClick={onClose} className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">
+          <button onClick={onClose} className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100" aria-label="Close dialog">
             <X size={16} />
           </button>
         </div>

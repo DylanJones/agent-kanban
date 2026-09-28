@@ -1,12 +1,12 @@
 @import "tailwindcss";
 
+/* Explicit dark mode: `dark:` utilities key off a `dark` class on <html> (set by src/theme.ts),
+   rather than only following the OS's prefers-color-scheme. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-}
-
-:root {
-  color-scheme: light dark;
 }
 
 html,
@@ -107,20 +107,18 @@ body {
   --diff-gutter-selected-background-color: #fff1a8;
 }
 
-@media (prefers-color-scheme: dark) {
-  .diff {
-    --diff-code-insert-background-color: rgb(46 160 67 / 0.15);
-    --diff-gutter-insert-background-color: rgb(63 185 80 / 0.3);
-    --diff-code-insert-edit-background-color: rgb(46 160 67 / 0.4);
-    --diff-code-insert-text-color: #e6edf3;
-    --diff-gutter-insert-text-color: #e6edf3;
-    --diff-code-delete-background-color: rgb(248 81 73 / 0.1);
-    --diff-gutter-delete-background-color: rgb(248 81 73 / 0.3);
-    --diff-code-delete-edit-background-color: rgb(248 81 73 / 0.4);
-    --diff-code-delete-text-color: #e6edf3;
-    --diff-gutter-delete-text-color: #e6edf3;
-    --diff-code-selected-background-color: rgb(187 128 9 / 0.25);
-    --diff-gutter-selected-background-color: rgb(187 128 9 / 0.4);
-    --diff-omit-gutter-line-color: #30363d;
-  }
+.dark .diff {
+  --diff-code-insert-background-color: rgb(46 160 67 / 0.15);
+  --diff-gutter-insert-background-color: rgb(63 185 80 / 0.3);
+  --diff-code-insert-edit-background-color: rgb(46 160 67 / 0.4);
+  --diff-code-insert-text-color: #e6edf3;
+  --diff-gutter-insert-text-color: #e6edf3;
+  --diff-code-delete-background-color: rgb(248 81 73 / 0.1);
+  --diff-gutter-delete-background-color: rgb(248 81 73 / 0.3);
+  --diff-code-delete-edit-background-color: rgb(248 81 73 / 0.4);
+  --diff-code-delete-text-color: #e6edf3;
+  --diff-gutter-delete-text-color: #e6edf3;
+  --diff-code-selected-background-color: rgb(187 128 9 / 0.25);
+  --diff-gutter-selected-background-color: rgb(187 128 9 / 0.4);
+  --diff-omit-gutter-line-color: #30363d;
 }
