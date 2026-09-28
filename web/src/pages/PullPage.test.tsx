@@ -93,10 +93,18 @@ function ok<T>(data: T) {
   return { data, error: undefined, response: new Response(null, { status: 200 }) };
 }
 
-function mockEndpoints({ prOverrides = {}, projectOverrides = {} }: { prOverrides?: Record<string, unknown>; projectOverrides?: Record<string, unknown> } = {}) {
+function mockEndpoints({
+  prOverrides = {},
+  projectOverrides = {},
+  mergeabilityOverrides = {},
+}: {
+  prOverrides?: Record<string, unknown>;
+  projectOverrides?: Record<string, unknown>;
+  mergeabilityOverrides?: Record<string, unknown>;
+} = {}) {
   getMock.mockImplementation((path: string) => {
     if (path === "/api/projects/{p}/pulls/{n}") return Promise.resolve(ok(pull(prOverrides)));
-    if (path === "/api/projects/{p}/pulls/{n}/mergeability") return Promise.resolve(ok({ mergeable: true, has_conflicts: false, blockers: [] }));
+    if (path === "/api/projects/{p}/pulls/{n}/mergeability") return Promise.resolve(ok({ mergeable: true, has_conflicts: false, blockers: [], ...mergeabilityOverrides }));
     if (path === "/api/projects/{p}") return Promise.resolve(ok({ merge_strategy: "merge", commit_msg_regex: "^🐛", ...projectOverrides }));
     throw new Error(`unexpected path: ${path}`);
   });
@@ -191,6 +199,77 @@ describe("PullPage merge box message validation", () => {
     await waitFor(() => expect(button).toHaveProperty("disabled", false));
 
     fireEvent.change(textarea, { target: { value: "Custom fix without emoji" } });
+    await waitFor(() => expect(button).toHaveProperty("disabled", true));
+  });
+});
+
+describe("PullPage merge box strategy switching and gating", () => {
+  beforeEach(() => {
+    getMock.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  test("merge conflicts stay blocking even when merging without approval is checked", async () => {
+    mockEndpoints({
+      prOverrides: { default_merge_message: "🐛 Fix example" },
+      mergeabilityOverrides: { mergeable: false, has_conflicts: true, blockers: ["merge conflicts in file.txt"] },
+    });
+    renderPage();
+
+    await screen.findByText("Not ready to merge");
+    fireEvent.click(screen.getByLabelText(/merge without approval/));
+
+    const button = screen.getByRole("button", { name: /Merge into/ });
+    await waitFor(() => expect(button).toHaveProperty("disabled", true));
+  });
+
+  test("merging without approval bypasses a missing-review blocker once conflicts are clear", async () => {
+    mockEndpoints({
+      prOverrides: { default_merge_message: "🐛 Fix example" },
+      mergeabilityOverrides: { mergeable: false, has_conflicts: false, blockers: ["no approving review at the current head"] },
+    });
+    renderPage();
+
+    await screen.findByText("Not ready to merge");
+    const button = screen.getByRole("button", { name: /Merge into/ });
+    expect(button).toHaveProperty("disabled", true);
+
+    fireEvent.click(screen.getByLabelText(/merge without approval/));
+    await waitFor(() => expect(button).toHaveProperty("disabled", false));
+  });
+
+  test("switching to rebase hides the message editor and skips message validation", async () => {
+    // default_merge_message doesn't match the project's regex, which would normally block merge/squash.
+    mockEndpoints({ prOverrides: { default_merge_message: "Fix example (no emoji)" } });
+    renderPage();
+
+    await screen.findByText("Ready to merge");
+    expect(screen.getByText(/First line must match/)).not.toBeNull();
+
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "rebase" } });
+
+    expect(screen.queryByPlaceholderText(/Leave blank to generate/)).toBeNull();
+    expect(screen.queryByText(/First line must match/)).toBeNull();
+    const button = screen.getByRole("button", { name: /Merge into/ });
+    await waitFor(() => expect(button).toHaveProperty("disabled", false));
+  });
+
+  test("switching back to merge from rebase restores message validation", async () => {
+    mockEndpoints({ prOverrides: { default_merge_message: "Fix example (no emoji)" } });
+    renderPage();
+
+    await screen.findByText("Ready to merge");
+    const select = screen.getByRole("combobox");
+    fireEvent.change(select, { target: { value: "rebase" } });
+    expect(screen.queryByPlaceholderText(/Leave blank to generate/)).toBeNull();
+
+    fireEvent.change(select, { target: { value: "squash" } });
+    expect(screen.getByPlaceholderText(/Leave blank to generate/)).not.toBeNull();
+    expect(screen.getByText(/First line must match/)).not.toBeNull();
+    const button = screen.getByRole("button", { name: /Merge into/ });
     await waitFor(() => expect(button).toHaveProperty("disabled", true));
   });
 });
