@@ -20,6 +20,29 @@ pub struct Config {
     /// (`serve --dangerously-allow-host-agents`). Off by default: agents only run in Docker.
     pub allow_host_agents: bool,
     pub secrets: Secrets,
+    /// Checkout to rebuild from (see `deploy::rebuild`). Defaults to the checkout this binary was
+    /// compiled from; override with `AKB_REPO_DIR` if the running binary was copied elsewhere.
+    pub repo_dir: PathBuf,
+    /// Where a rebuild restarts into (see `deploy::build_artifact_path`). `None` means wherever
+    /// `cargo build --release` itself wrote the binary. Set this (`AKB_BIN`) when the deployed
+    /// binary lives somewhere Cargo doesn't write to (e.g. a copied/symlinked deployment) — a
+    /// successful rebuild then installs the freshly built binary there (see
+    /// `deploy::install_build_artifact`) before restarting into it. Also used in tests, where no
+    /// real build happens.
+    pub restart_artifact: Option<PathBuf>,
+    /// `CARGO_TARGET_DIR`, read once at startup so `deploy::cargo_output_path` doesn't depend on
+    /// process-global env state. `None` means the default `repo_dir/target`. A relative value is
+    /// resolved against `repo_dir` (where the `cargo build` step itself runs), not this process's
+    /// own cwd.
+    pub cargo_target_dir: Option<PathBuf>,
+    /// This process's own executable path, captured once at startup (not re-read later: replacing
+    /// the running binary's file can make a fresh `current_exe()` call return a path suffixed
+    /// with " (deleted)" on Linux). Used to decide whether the supervisor (if any) would relaunch
+    /// the artifact a rebuild just built, or whether this process must exec it directly.
+    pub running_exe: Option<PathBuf>,
+    /// Replaces the real `npm ci` / `npm run build` / `cargo build --release` steps in tests, so
+    /// the rebuild flow can be exercised without a real (slow) compile.
+    pub build_steps_override: Option<Vec<crate::deploy::BuildStep>>,
 }
 
 /// Why an agent run was refused for a project without a container.
@@ -52,7 +75,24 @@ impl Config {
         let host = if bind.ip().is_unspecified() || bind.ip().is_loopback() { "127.0.0.1".to_string() } else { bind.ip().to_string() };
         let public_url = format!("http://{host}:{}", bind.port());
         let container_url = format!("http://host.docker.internal:{}", bind.port());
-        Ok(Config { data_dir, bind, public_url, container_url, no_auth, allow_host_agents: false, secrets })
+        let repo_dir = std::env::var("AKB_REPO_DIR").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+        let restart_artifact = std::env::var("AKB_BIN").ok().map(PathBuf::from);
+        let cargo_target_dir = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from);
+        let running_exe = std::env::current_exe().ok();
+        Ok(Config {
+            data_dir,
+            bind,
+            public_url,
+            container_url,
+            no_auth,
+            allow_host_agents: false,
+            secrets,
+            repo_dir,
+            restart_artifact,
+            cargo_target_dir,
+            running_exe,
+            build_steps_override: None,
+        })
     }
 
     /// Only one server may use a data directory: a second one would mark the first one's runs

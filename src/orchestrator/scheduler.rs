@@ -220,6 +220,10 @@ fn priority_rank(p: &Option<String>) -> i32 {
 }
 
 pub async fn tick(app: &AppState) -> anyhow::Result<()> {
+    if app.deploy.dispatch_paused.load(std::sync::atomic::Ordering::Relaxed) {
+        // A rebuild is waiting for active runs to finish before restarting; don't start new ones.
+        return Ok(());
+    }
     let max: i64 = db::get_setting(&app.db, "max_concurrent_runs").await.unwrap_or(3);
     let mut active: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM agent_runs WHERE status IN ('queued','preparing','running')").fetch_one(&app.db).await?;
@@ -293,7 +297,16 @@ pub async fn tick(app: &AppState) -> anyhow::Result<()> {
 }
 
 /// Create a run row and spawn its task. The unique index on active runs makes this race-free.
+///
+/// Holds `deploy.dispatch_gate` for its whole "check paused, then insert" span, so it can't land
+/// a new run in the gap between a rebuild's "waiting for zero active runs" check and its restart
+/// decision (see `deploy::schedule_restart`) — including when called directly (bypassing the
+/// scheduler's own tick-entry check) for a manually started run.
 pub async fn start_run(app: &AppState, project: &Project, issue: &Issue, role: Role, agent: &AgentDefinition) -> ApiResult<AgentRun> {
+    let _guard = app.deploy.dispatch_gate.lock().await;
+    if app.deploy.dispatch_paused.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err(ApiError::conflict("a rebuild is waiting to restart the server; new runs are paused until then"));
+    }
     if issue.state == IssueState::Done || issue.state == IssueState::Closed {
         return Err(ApiError::conflict("issue is closed"));
     }

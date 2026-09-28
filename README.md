@@ -65,6 +65,11 @@ It runs `target/release/agent-kanban` from this checkout and logs to
 resume on the next start. Projects that use containers wait for Docker Desktop to be running before
 dispatching.
 
+Once it's running, the **Server** page (admin only) rebuilds and restarts it for you after you
+merge a PR into `main` — no terminal needed, including from a phone: it shows how many commits
+you're behind, streams the `npm run build` / `cargo build --release` log, and only restarts if the
+build succeeds. Restart now (active runs resume after) or once the active ones finish.
+
 The scheduler starts **off**. Turn it on with the switch in the header, or pass
 `serve --scheduler`. Until then, agents only run when you press **Run** on an issue.
 

@@ -75,6 +75,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/build-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How far the running server is behind the checkout it was built from, and whether a rebuild is
+         *     in progress.
+         */
+        get: operations["deploy_status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/build-status/rebuild": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rebuild the web UI and server from the checkout, then restart. Runs as a background job
+         *     (stream its log via `GET /api/jobs/{id}` or `kind=server.build`); the restart only happens if
+         *     the build succeeds. `mode: "now"` interrupts active agent runs (they resume after the
+         *     restart); `mode: "drain"` stops the scheduler from starting new runs and restarts once the
+         *     active ones finish.
+         */
+        post: operations["deploy_rebuild"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/comments/{id}": {
         parameters: {
             query?: never;
@@ -1297,6 +1340,51 @@ export interface components {
             id: components["schemas"]["Column"];
             title: string;
         };
+        BuildStatus: {
+            /** Format: int64 */
+            active_runs: number;
+            /**
+             * @description Commit this running server was built from ("unknown" if it couldn't be determined when
+             *     compiling, e.g. no `.git` in the build context).
+             */
+            build_sha: string;
+            build_time: string;
+            /**
+             * Format: int64
+             * @description Commits `build_sha` is behind `main`; `null` if unknown (e.g. `build_sha` isn't reachable
+             *     from `main` — a shallow clone, or history that was rewritten).
+             */
+            commits_behind?: number | null;
+            /**
+             * @description Set for as long as the most recent deployment attempt's failure hasn't been superseded by
+             *     a new one (`try_begin_deploy` clears it on admission). A page awaiting a deploy should
+             *     treat this as a failure and stop waiting even if the triggering job's own row never made it
+             *     to `status: "failed"` (see `DeployState::deploy_error`).
+             */
+            deploy_error?: string | null;
+            /** @description The checkout has uncommitted changes. */
+            dirty: boolean;
+            dispatch_paused: boolean;
+            /**
+             * @description Tip of the checkout's local `main` branch (what a rebuild is meant to build), not
+             *     necessarily what's currently checked out there — see `on_main`.
+             */
+            head_sha?: string | null;
+            head_summary?: string | null;
+            /**
+             * @description Random per-process id: changes across a restart even if `build_sha` doesn't (e.g. a
+             *     restart with no new commits), so the UI can tell the server actually came back.
+             */
+            instance_id: string;
+            /**
+             * @description The checkout's `HEAD` is `main` (as opposed to a detached HEAD or another branch); a
+             *     rebuild always builds whatever is actually checked out, so `commits_behind` and a rebuild
+             *     button are only meaningful when this is true.
+             */
+            on_main: boolean;
+            /** @description A build succeeded and the process is about to restart, or (in drain mode) is waiting to. */
+            restart_pending: boolean;
+        };
         Card: {
             closed_at?: string | null;
             column: components["schemas"]["Column"];
@@ -1932,10 +2020,15 @@ export interface components {
             title: string;
             updated_at: string;
         };
+        RebuildRequest: {
+            mode: components["schemas"]["RestartMode"];
+        };
         ResolveRequest: {
             /** @description Optional note added to the thread, e.g. "Fixed in abc123". */
             comment?: string | null;
         };
+        /** @enum {string} */
+        RestartMode: "now" | "drain";
         Review: {
             author_kind: string;
             author_name: string;
@@ -2324,6 +2417,48 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentTestResult"];
+                };
+            };
+        };
+    };
+    deploy_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BuildStatus"];
+                };
+            };
+        };
+    };
+    deploy_rebuild: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RebuildRequest"];
+            };
+        };
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
                 };
             };
         };

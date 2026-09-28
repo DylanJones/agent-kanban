@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { BarChart3, Bot, BookOpen, Inbox, KanbanSquare, Menu, Play, Settings, Settings2, Square, Terminal, X } from "lucide-react";
+import { BarChart3, Bot, BookOpen, Inbox, KanbanSquare, Menu, Play, RefreshCw, Settings, Settings2, Square, Terminal, X } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { Link, NavLink, useLocation, useNavigate, useParams } from "react-router";
 import { ApiError, ROLE_LABEL, type RunView, api, client, unwrap } from "../api/client";
@@ -16,6 +16,10 @@ export function useProjects() {
 
 export function useSettings() {
   return useQuery({ queryKey: ["settings"], queryFn: () => unwrap(client.GET("/api/settings")) });
+}
+
+export function useMe() {
+  return useQuery({ queryKey: ["me"], queryFn: () => unwrap(client.GET("/api/me")) });
 }
 
 export function useInboxCount(slug?: string) {
@@ -145,8 +149,20 @@ function RunToasts() {
   );
 }
 
-function NavLinks({ current, inbox, large }: { current?: string; inbox?: number; large?: boolean }) {
+/** Small: whether the running server is behind the checkout's HEAD, for the "Server" nav item. */
+function useCommitsBehind(enabled: boolean) {
+  const status = useQuery({
+    queryKey: ["build-status"],
+    queryFn: () => unwrap(client.GET("/api/build-status")),
+    enabled,
+    refetchInterval: 60000,
+  });
+  return status.data?.commits_behind ?? undefined;
+}
+
+function NavLinks({ current, inbox, large, isHuman }: { current?: string; inbox?: number; large?: boolean; isHuman?: boolean }) {
   const size = large ? 17 : 15;
+  const behind = useCommitsBehind(!!isHuman);
   return (
     <>
       {current && (
@@ -171,6 +187,11 @@ function NavLinks({ current, inbox, large }: { current?: string; inbox?: number;
       {current && (
         <NavItem large={large} to={`/p/${current}/settings`} icon={<Settings2 size={size} />}>
           Project
+        </NavItem>
+      )}
+      {isHuman && (
+        <NavItem large={large} to="/server" icon={<RefreshCw size={size} />} badge={behind || undefined}>
+          Server
         </NavItem>
       )}
     </>
@@ -203,7 +224,7 @@ function LiveDot({ connected }: { connected: boolean }) {
 }
 
 /** Small screens: the nav lives in a drawer that slides in from the left. */
-function NavDrawer({ open, onClose, current, inbox }: { open: boolean; onClose: () => void; current?: string; inbox?: number }) {
+function NavDrawer({ open, onClose, current, inbox, isHuman }: { open: boolean; onClose: () => void; current?: string; inbox?: number; isHuman?: boolean }) {
   const { pathname } = useLocation();
   const panelRef = useRef<HTMLElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
@@ -277,7 +298,7 @@ function NavDrawer({ open, onClose, current, inbox }: { open: boolean; onClose: 
         </div>
         <ProjectSelect current={current} className="w-full py-2" />
         <nav className="flex flex-col gap-0.5">
-          <NavLinks current={current} inbox={inbox} large />
+          <NavLinks current={current} inbox={inbox} large isHuman={isHuman} />
         </nav>
         <div className="mt-auto space-y-3 border-t border-zinc-200 dark:border-zinc-800 px-1 pt-3">
           <SchedulerControl />
@@ -298,6 +319,8 @@ export function Layout({ children }: { children: ReactNode }) {
   const inbox = useInboxCount(current);
   const [menu, setMenu] = useState(false);
   const closeMenu = useCallback(() => setMenu(false), []);
+  const me = useMe();
+  const isHuman = me.data?.kind === "human";
   const [theme, setTheme] = useThemePreference();
   const [settingsOpen, setSettingsOpen] = useState(false);
   return (
@@ -316,7 +339,7 @@ export function Layout({ children }: { children: ReactNode }) {
         </Link>
         <ProjectSelect current={current} className="hidden lg:block" />
         <nav className="hidden items-center gap-1 lg:flex">
-          <NavLinks current={current} inbox={inbox.data} />
+          <NavLinks current={current} inbox={inbox.data} isHuman={isHuman} />
         </nav>
         <div className="ml-auto flex items-center gap-3">
           <div className="hidden lg:block">
@@ -337,7 +360,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <LiveDot connected={connected} />
         </div>
       </header>
-      <NavDrawer open={menu} onClose={closeMenu} current={current} inbox={inbox.data} />
+      <NavDrawer open={menu} onClose={closeMenu} current={current} inbox={inbox.data} isHuman={isHuman} />
       <main className="min-h-0 flex-1 overflow-auto">{children}</main>
       <RunToasts />
       <ConnectClaudeModal />

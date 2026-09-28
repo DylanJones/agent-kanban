@@ -5,6 +5,7 @@ pub mod agents;
 pub mod attachments;
 pub mod board;
 pub mod credentials;
+pub mod deploy;
 pub mod issues;
 pub mod mcp;
 pub mod meta;
@@ -54,6 +55,7 @@ curl -sS -X POST "$AKB_API/projects/$P/issues" -H "Authorization: Bearer $AKB_AU
         (name = "github", description = "GitHub import and mirroring"),
         (name = "settings", description = "Global settings and API tokens"),
         (name = "jobs", description = "Background jobs"),
+        (name = "deploy", description = "Rebuilding and restarting the server from the app"),
         (name = "usage", description = "Token usage reports by model, subscription, role, agent, project and day"),
         (name = "meta", description = "Health, identity, live events and the agent guide"),
     )
@@ -77,6 +79,8 @@ pub fn router() -> (Router<AppState>, utoipa::openapi::OpenApi) {
         .routes(routes!(meta::list_tokens, meta::create_token))
         .routes(routes!(meta::revoke_token))
         .routes(routes!(meta::events_stream))
+        .routes(routes!(deploy::build_status))
+        .routes(routes!(deploy::rebuild))
         .routes(routes!(projects::list, projects::create))
         .routes(routes!(projects::get, projects::patch))
         .routes(routes!(projects::labels, projects::upsert_label))

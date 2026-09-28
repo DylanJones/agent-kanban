@@ -45,6 +45,7 @@ install)
   <dict>
     <key>PATH</key><string>$SVC_PATH</string>
     <key>AKB_DATA_DIR</key><string>$DATA</string>
+    <key>AKB_SUPERVISED</key><string>launchd</string>
   </dict>
   <key>WorkingDirectory</key><string>$DATA</string>
   <key>RunAtLoad</key><true/>

@@ -114,7 +114,23 @@ async fn main() -> anyhow::Result<()> {
                 println!("  Host agents allowed: projects without a container run agents unsandboxed on this machine.");
             }
             println!();
-            axum::serve(listener, api::app(app)).with_graceful_shutdown(shutdown()).await?;
+            let serve = axum::serve(listener, api::app(app.clone())).with_graceful_shutdown(shutdown(app.clone()));
+            // Bound the post-signal grace period: once a restart is requested, force it through
+            // even if an open SSE connection would otherwise hold the graceful shutdown forever.
+            let bound = {
+                let app = app.clone();
+                async move {
+                    app.deploy.notify.notified().await;
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                }
+            };
+            tokio::select! {
+                r = serve => r?,
+                () = bound => tracing::warn!("graceful shutdown exceeded 10s after a restart was requested; forcing it"),
+            }
+            if agent_kanban::deploy::should_restart(&app) {
+                agent_kanban::deploy::perform_restart(&app);
+            }
         }
         Cmd::AddProject { slug, repo_path, name, base_branch, github_repo, github_project } => {
             let app = AppState::new(Config::load(cli.data_dir, default_bind, false)?).await?;
@@ -164,7 +180,10 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn shutdown() {
-    let _ = tokio::signal::ctrl_c().await;
+async fn shutdown(app: AppState) {
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = app.deploy.notify.notified() => {}
+    }
     tracing::info!("shutting down");
 }
