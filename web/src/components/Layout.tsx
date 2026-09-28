@@ -200,18 +200,59 @@ function LiveDot({ connected }: { connected: boolean }) {
   );
 }
 
+const FOCUSABLE_SELECTOR = 'a[href], button:not([disabled]), select:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 /** Small screens: the nav lives in a drawer that slides in from the left. */
 function NavDrawer({ open, onClose, current, inbox }: { open: boolean; onClose: () => void; current?: string; inbox?: number }) {
   const { pathname } = useLocation();
+  const panelRef = useRef<HTMLElement>(null);
+  const previouslyFocused = useRef<HTMLElement | null>(null);
   // Close after navigating.
   const first = useRef(pathname);
   useEffect(() => {
     if (pathname !== first.current) onClose();
     first.current = pathname;
   }, [pathname, onClose]);
+  // Move focus into the drawer when it opens, and restore it when it closes, so it never
+  // lingers on (or returns to) a trigger that's now obscured by the backdrop.
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (open) {
+      previouslyFocused.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const focusable = panel ? Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter((el) => el.offsetParent !== null) : [];
+      (focusable[0] ?? panel)?.focus();
+    } else {
+      previouslyFocused.current?.focus();
+      previouslyFocused.current = null;
+    }
+  }, [open]);
   useEffect(() => {
     if (!open) return;
-    const k = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const k = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab" || !panelRef.current) return;
+      // Trap Tab/Shift+Tab inside the open drawer so it can't escape into the obscured page behind it.
+      const focusable = Array.from(panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter((el) => el.offsetParent !== null);
+      if (focusable.length === 0) return;
+      const [firstEl, lastEl] = [focusable[0], focusable[focusable.length - 1]];
+      // Focus can start outside the panel (e.g. the drawer opened without moving focus yet,
+      // or something else stole it); pull it back in instead of only wrapping at the boundaries.
+      if (!panelRef.current.contains(document.activeElement)) {
+        e.preventDefault();
+        (e.shiftKey ? lastEl : firstEl).focus();
+        return;
+      }
+      if (e.shiftKey && document.activeElement === firstEl) {
+        e.preventDefault();
+        lastEl.focus();
+      } else if (!e.shiftKey && document.activeElement === lastEl) {
+        e.preventDefault();
+        firstEl.focus();
+      }
+    };
     window.addEventListener("keydown", k);
     return () => window.removeEventListener("keydown", k);
   }, [open, onClose]);
@@ -219,6 +260,8 @@ function NavDrawer({ open, onClose, current, inbox }: { open: boolean; onClose: 
     <div className={clsx("fixed inset-0 z-50 lg:hidden", !open && "pointer-events-none")} aria-hidden={!open}>
       <div className={clsx("absolute inset-0 bg-black/40 transition-opacity", open ? "opacity-100" : "opacity-0")} onClick={onClose} />
       <aside
+        ref={panelRef}
+        tabIndex={-1}
         className={clsx(
           "absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col gap-4 border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-3 shadow-xl transition-transform",
           open ? "translate-x-0" : "-translate-x-full",
