@@ -169,10 +169,10 @@ export function Field({ label, children, hint }: { label: string; children: Reac
 }
 
 export const fieldCls =
-  "rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40";
+  "rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-2.5 py-1.5 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40";
 
 export const inputCls =
-  "w-full rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40";
+  "w-full rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-2.5 py-1.5 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40";
 
 export function Empty({ children }: { children: ReactNode }) {
   return <div className="text-sm text-zinc-500 italic py-6 text-center">{children}</div>;
