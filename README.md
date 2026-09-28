@@ -1,5 +1,8 @@
 # 🗂️ agent-kanban
 
+> [!WARNING]
+> **AI Level 5: fully vibe-coded, with human testing.**
+
 A local kanban board that runs coding agents: Claude Code, Codex, OpenCode, or any
 [Agent Client Protocol](https://agentclientprotocol.com) adapter. It moves issues through a
 triage → fix → review → merge workflow. The board is the source of truth for issues, pull
