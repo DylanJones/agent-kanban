@@ -246,11 +246,13 @@ function MergeBox({ pr, slug }: { pr: PullDetail; slug: string }) {
       </div>
     );
   if (pr.state === "closed") return <div className="rounded-lg border p-3 text-sm text-zinc-500">Closed without merging.</div>;
-  const strat = strategy || project.data?.merge_strategy || "squash";
+  const strat = strategy || project.data?.merge_strategy || "merge";
   const regex = project.data?.commit_msg_regex;
+  const blankMessage = message.trim() === "";
+  const effectiveMessage = blankMessage ? pr.default_merge_message : message;
   let msgOk = true;
   try {
-    msgOk = !regex || strat === "rebase" || new RegExp(regex, "u").test(message.split("\n")[0]);
+    msgOk = !regex || strat === "rebase" || new RegExp(regex, "u").test(effectiveMessage.split("\n")[0]);
   } catch {
     /* server validates */
   }
@@ -279,7 +281,12 @@ function MergeBox({ pr, slug }: { pr: PullDetail; slug: string }) {
           </label>
         </div>
         {strat !== "rebase" && (
-          <textarea className={clsx(inputCls, "font-mono text-xs h-20", !msgOk && "ring-2 ring-rose-400")} value={message} onChange={(e) => setMessage(e.target.value)} />
+          <textarea
+            className={clsx(inputCls, "font-mono text-xs h-20", !msgOk && "ring-2 ring-rose-400")}
+            placeholder="Leave blank to generate a message from the title and linked issues"
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+          />
         )}
         {!msgOk && <div className="text-xs text-rose-600 break-words">First line must match {regex}</div>}
         <div className="flex flex-wrap gap-2">

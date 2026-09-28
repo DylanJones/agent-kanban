@@ -88,13 +88,14 @@ pub async fn create_project(app: &AppState, req: NewProject) -> ApiResult<Projec
     };
     let now = db::now();
     sqlx::query(
-        "INSERT INTO projects(slug, name, repo_path, base_branch, github_repo, github_project_owner, github_project_number, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO projects(slug, name, repo_path, base_branch, merge_strategy, github_repo, github_project_owner, github_project_number, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&slug)
     .bind(req.name.unwrap_or_else(|| slug.clone()))
     .bind(&repo_path)
     .bind(&base)
+    .bind("merge")
     .bind(&req.github_repo)
     .bind(&req.github_project_owner)
     .bind(req.github_project_number)

@@ -60,9 +60,12 @@ async fn triage_fix_review_merge() {
     let pr = services::pull_by_id(&env.app.db, pr.id).await.unwrap();
     assert_eq!(pr.approved_sha, pr.head_sha);
 
-    // A human merges (squash): base advances, issue done, worktree and branch cleaned up.
+    // A human merges with the project default (merge commit): base advances, issue done, worktree and branch cleaned up.
+    assert_eq!(env.project.merge_strategy, "merge", "new projects default to a merge commit");
     let res = services::merge::merge(&env.app, &env.project, pr.number, &Actor::human("dylan"), Default::default()).await.unwrap();
     assert_eq!(git(&env.repo, &["rev-parse", "master"]), res.merged_sha);
+    assert_eq!(res.strategy, "merge");
+    assert_eq!(git(&env.repo, &["rev-list", "--parents", "-n1", "master"]).split(' ').count(), 3, "merge commit has two parents");
     assert!(git(&env.repo, &["log", "-1", "--format=%s", "master"]).starts_with("🐛 Fix the thing"));
     assert!(git(&env.repo, &["log", "-1", "--format=%b", "master"]).contains("Closes #1"));
     assert_eq!(issue(&env, i.number).await.state, IssueState::Done);
