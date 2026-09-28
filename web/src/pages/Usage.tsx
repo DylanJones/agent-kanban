@@ -1,7 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Clock } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { type S, client, unwrap } from "../api/client";
 import { ErrorBox, Pill, timeAgo } from "../components/ui";
 
@@ -225,9 +225,22 @@ export default function UsagePage() {
   const report = useQuery({
     queryKey: ["usage", from.slice(0, 13), group],
     queryFn: () => unwrap(client.GET("/api/usage", { params: { query: { from, group_by: group } } })),
+    placeholderData: keepPreviousData,
     refetchInterval: 60000,
   });
-  const r = report.data;
+  // React Query clears `data` on a failed fetch even with keepPreviousData, so a rejected
+  // uncached tab would otherwise unmount the tiles/chart/table and collapse the page just like
+  // the unpatched loading state did. Retain the last successful report ourselves and fall back
+  // to it while the current query is in error, alongside the ErrorBox reporting the failure.
+  const previousReportRef = useRef<Report | undefined>(undefined);
+  useEffect(() => {
+    if (report.data) previousReportRef.current = report.data;
+  }, [report.data]);
+  const r = report.data ?? (report.isError ? previousReportRef.current : undefined);
+  // While a new group/range fetches (or is paused offline) or the latest fetch failed, keep
+  // rendering the previous report dimmed instead of unmounting it, so the page doesn't shrink
+  // and jump the scroll position back to the top.
+  const stale = report.isPlaceholderData || report.isError;
   const t = r?.totals;
   const cacheShare = t && t.total_tokens ? Math.round((t.cached_input_tokens / t.total_tokens) * 100) : 0;
   return (
@@ -251,7 +264,7 @@ export default function UsagePage() {
         </div>
         <ErrorBox error={report.error} />
         {t && (
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+          <div className={clsx("grid grid-cols-2 gap-3 md:grid-cols-5 transition-opacity", stale && "opacity-60")}>
             <Tile label="Total tokens" value={fmtTokens(t.total_tokens)} sub={`${t.runs} runs`} />
             <Tile label="Output tokens" value={fmtTokens(t.output_tokens)} sub={t.reasoning_tokens ? `${fmtTokens(t.reasoning_tokens)} reasoning` : undefined} />
             <Tile label="Cache reads" value={`${cacheShare}%`} sub={`${fmtTokens(t.cached_input_tokens)} of total`} />
@@ -261,11 +274,11 @@ export default function UsagePage() {
         )}
         <Subscriptions />
         {r && (
-          <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+          <div className={clsx("rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 transition-opacity", stale && "opacity-60")}>
             <DailyChart report={r} />
           </div>
         )}
-        <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 space-y-3">
+        <div className={clsx("rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 space-y-3 transition-opacity", stale && "opacity-60")}>
           <div className="flex flex-wrap gap-1">
             {GROUPS.map(([g, label]) => (
               <button key={g} onClick={() => setGroup(g)} className={clsx("rounded-md px-2.5 py-1 text-sm", group === g ? "bg-zinc-200 dark:bg-zinc-800 font-medium" : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800/60")}>
@@ -273,7 +286,7 @@ export default function UsagePage() {
               </button>
             ))}
           </div>
-          {r && <Breakdown rows={r.rows} total={r.totals.total_tokens} group={group} />}
+          {r && <Breakdown rows={r.rows} total={r.totals.total_tokens} group={r.group_by} />}
         </div>
         <p className="text-xs text-zinc-500">
           Totals come from each agent's session log where available (exact, per model), otherwise from what the agent reports over ACP. *Cost is
