@@ -225,7 +225,9 @@ function NavDrawer({ open, onClose, current, inbox }: { open: boolean; onClose: 
         )}
       >
         <div className="flex items-center justify-between px-1">
-          <span className="font-semibold tracking-tight">🗂️ agent-kanban</span>
+          <Link to={current ? `/p/${current}` : "/"} onClick={onClose} className="font-semibold tracking-tight">
+            🗂️ agent-kanban
+          </Link>
           <button onClick={onClose} className="rounded-md p-2 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-900" aria-label="Close menu">
             <X size={18} />
           </button>
@@ -260,7 +262,9 @@ export function Layout({ children }: { children: ReactNode }) {
           <Menu size={18} />
           {!!inbox.data && <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-amber-500" />}
         </button>
-        <span className="whitespace-nowrap font-semibold tracking-tight">🗂️ agent-kanban</span>
+        <Link to={current ? `/p/${current}` : "/"} className="whitespace-nowrap font-semibold tracking-tight hover:text-zinc-600 dark:hover:text-zinc-300">
+          🗂️ agent-kanban
+        </Link>
         <ProjectSelect current={current} className="hidden lg:block" />
         <nav className="hidden items-center gap-1 lg:flex">
           <NavLinks current={current} inbox={inbox.data} />
