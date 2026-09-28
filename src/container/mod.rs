@@ -43,6 +43,23 @@ pub async fn docker(args: &[&str]) -> anyhow::Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Whether the Docker daemon answers. Cached briefly: the board asks on every render, and at login
+/// the server can start before Docker Desktop does.
+pub async fn daemon_ready() -> bool {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static CACHE: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
+    if let Some((at, ok)) = *CACHE.lock().unwrap()
+        && at.elapsed() < Duration::from_secs(10)
+    {
+        return ok;
+    }
+    let probe = Command::new("docker").args(["info", "--format", "{{.ServerVersion}}"]).kill_on_drop(true).output();
+    let ok = matches!(tokio::time::timeout(Duration::from_secs(5), probe).await, Ok(Ok(o)) if o.status.success());
+    *CACHE.lock().unwrap() = Some((Instant::now(), ok));
+    ok
+}
+
 async fn build(tag: &str, dockerfile: &str, context: &Path, log: &mut (dyn FnMut(String) + Send)) -> anyhow::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let df_path = std::env::temp_dir().join(format!("akb-{}.Dockerfile", tag.replace(['/', ':'], "-")));

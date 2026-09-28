@@ -47,6 +47,21 @@ cargo build --release
 ./target/release/agent-kanban serve --bind 0.0.0.0:7878
 ```
 
+To keep it running in the background on macOS (it starts at login and restarts if it exits),
+install it as a LaunchAgent:
+
+```sh
+scripts/service.sh install 0.0.0.0:7878   # or omit the bind for 127.0.0.1:7878
+scripts/service.sh login-url              # the login link
+cargo build --release && scripts/service.sh restart   # deploy a new build
+scripts/service.sh status | logs | uninstall
+```
+
+It runs `target/release/agent-kanban` from this checkout and logs to
+`~/.agent-kanban/logs/server.log`. Stopping or restarting it interrupts active runs, which
+resume on the next start. Projects that use containers wait for Docker Desktop to be running before
+dispatching.
+
 The scheduler starts **off**. Turn it on with the switch in the header, or pass
 `serve --scheduler`. Until then, agents only run when you press **Run** on an issue.
 

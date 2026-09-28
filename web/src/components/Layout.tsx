@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { BarChart3, Bot, BookOpen, Inbox, KanbanSquare, Play, Settings2, Square, Terminal } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
-import { Link, NavLink, useNavigate, useParams } from "react-router";
+import { BarChart3, Bot, BookOpen, Inbox, KanbanSquare, Menu, Play, Settings2, Square, Terminal, X } from "lucide-react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { Link, NavLink, useLocation, useNavigate, useParams } from "react-router";
 import { ApiError, ROLE_LABEL, type RunView, api, client, unwrap } from "../api/client";
 import { useLiveEvents } from "../api/live";
 import { ConnectClaudeModal } from "./ConnectClaude";
@@ -32,14 +32,15 @@ export function useInboxCount(slug?: string) {
   });
 }
 
-function NavItem({ to, icon, children, badge }: { to: string; icon: ReactNode; children: ReactNode; badge?: number }) {
+function NavItem({ to, icon, children, badge, large }: { to: string; icon: ReactNode; children: ReactNode; badge?: number; large?: boolean }) {
   return (
     <NavLink
       to={to}
       end={to.split("/").length <= 3}
       className={({ isActive }) =>
         clsx(
-          "flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm",
+          "flex items-center rounded-md text-sm",
+          large ? "gap-2.5 px-3 py-2.5" : "gap-1.5 px-2.5 py-1.5",
           isActive ? "bg-zinc-200/70 dark:bg-zinc-800 font-medium" : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900",
         )
       }
@@ -142,68 +143,164 @@ function RunToasts() {
   );
 }
 
+function NavLinks({ current, inbox, large }: { current?: string; inbox?: number; large?: boolean }) {
+  const size = large ? 17 : 15;
+  return (
+    <>
+      {current && (
+        <>
+          <NavItem large={large} to={`/p/${current}`} icon={<KanbanSquare size={size} />}>
+            Board
+          </NavItem>
+          <NavItem large={large} to={`/p/${current}/inbox`} icon={<Inbox size={size} />} badge={inbox}>
+            Inbox
+          </NavItem>
+        </>
+      )}
+      <NavItem large={large} to="/runs" icon={<Terminal size={size} />}>
+        Runs
+      </NavItem>
+      <NavItem large={large} to="/agents" icon={<Bot size={size} />}>
+        Agents
+      </NavItem>
+      <NavItem large={large} to="/usage" icon={<BarChart3 size={size} />}>
+        Usage
+      </NavItem>
+      {current && (
+        <NavItem large={large} to={`/p/${current}/settings`} icon={<Settings2 size={size} />}>
+          Project
+        </NavItem>
+      )}
+    </>
+  );
+}
+
+function ProjectSelect({ current, className }: { current?: string; className?: string }) {
+  const projects = useProjects();
+  const nav = useNavigate();
+  if (!projects.data || projects.data.length === 0) return null;
+  return (
+    <select
+      className={clsx("rounded-md border border-zinc-300 dark:border-zinc-700 bg-transparent px-2 py-1 text-sm", className)}
+      value={current}
+      onChange={(e) => nav(`/p/${e.target.value}`)}
+    >
+      {projects.data.map((p) => (
+        <option key={p.slug} value={p.slug}>
+          {p.name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function LiveDot({ connected }: { connected: boolean }) {
+  return (
+    <span title={connected ? "Live updates connected" : "Reconnecting…"} className={clsx("h-2 w-2 shrink-0 rounded-full", connected ? "bg-emerald-500" : "bg-zinc-400 animate-pulse")} />
+  );
+}
+
+/** Small screens: the nav lives in a drawer that slides in from the left. */
+function NavDrawer({ open, onClose, current, inbox }: { open: boolean; onClose: () => void; current?: string; inbox?: number }) {
+  const { pathname } = useLocation();
+  // Close after navigating.
+  const first = useRef(pathname);
+  useEffect(() => {
+    if (pathname !== first.current) onClose();
+    first.current = pathname;
+  }, [pathname, onClose]);
+  useEffect(() => {
+    if (!open) return;
+    const k = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [open, onClose]);
+  return (
+    <div className={clsx("fixed inset-0 z-50 lg:hidden", !open && "pointer-events-none")} aria-hidden={!open}>
+      <div className={clsx("absolute inset-0 bg-black/40 transition-opacity", open ? "opacity-100" : "opacity-0")} onClick={onClose} />
+      <aside
+        className={clsx(
+          "absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col gap-4 border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-3 shadow-xl transition-transform",
+          open ? "translate-x-0" : "-translate-x-full",
+        )}
+      >
+        <div className="flex items-center justify-between px-1">
+          <span className="font-semibold tracking-tight">🗂️ agent-kanban</span>
+          <button onClick={onClose} className="rounded-md p-2 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-900" aria-label="Close menu">
+            <X size={18} />
+          </button>
+        </div>
+        <ProjectSelect current={current} className="w-full py-2" />
+        <nav className="flex flex-col gap-0.5">
+          <NavLinks current={current} inbox={inbox} large />
+        </nav>
+        <div className="mt-auto space-y-3 border-t border-zinc-200 dark:border-zinc-800 px-1 pt-3">
+          <SchedulerControl />
+          <a href="/api/docs" target="_blank" className="flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">
+            <BookOpen size={15} /> API docs
+          </a>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
 export function Layout({ children }: { children: ReactNode }) {
   const connected = useLiveEvents();
   const { slug } = useParams();
   const projects = useProjects();
-  const nav = useNavigate();
   const current = slug ?? projects.data?.[0]?.slug;
   const inbox = useInboxCount(current);
+  const [menu, setMenu] = useState(false);
+  const closeMenu = useCallback(() => setMenu(false), []);
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center gap-3 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 px-4 py-2">
-        <span className="font-semibold tracking-tight">🗂️ agent-kanban</span>
-        {projects.data && projects.data.length > 0 && (
-          <select
-            className="rounded-md border border-zinc-300 dark:border-zinc-700 bg-transparent px-2 py-1 text-sm"
-            value={current}
-            onChange={(e) => nav(`/p/${e.target.value}`)}
-          >
-            {projects.data.map((p) => (
-              <option key={p.slug} value={p.slug}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        )}
-        <nav className="flex items-center gap-1">
-          {current && (
-            <>
-              <NavItem to={`/p/${current}`} icon={<KanbanSquare size={15} />}>
-                Board
-              </NavItem>
-              <NavItem to={`/p/${current}/inbox`} icon={<Inbox size={15} />} badge={inbox.data}>
-                Inbox
-              </NavItem>
-            </>
-          )}
-          <NavItem to="/runs" icon={<Terminal size={15} />}>
-            Runs
-          </NavItem>
-          <NavItem to="/agents" icon={<Bot size={15} />}>
-            Agents
-          </NavItem>
-          <NavItem to="/usage" icon={<BarChart3 size={15} />}>
-            Usage
-          </NavItem>
-          {current && (
-            <NavItem to={`/p/${current}/settings`} icon={<Settings2 size={15} />}>
-              Project
-            </NavItem>
-          )}
+      <header className="flex items-center gap-2 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 px-2 py-1.5 lg:gap-3 lg:px-4 lg:py-2">
+        <button onClick={() => setMenu(true)} className="relative rounded-md p-2 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 lg:hidden" aria-label="Menu">
+          <Menu size={18} />
+          {!!inbox.data && <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-amber-500" />}
+        </button>
+        <span className="whitespace-nowrap font-semibold tracking-tight">🗂️ agent-kanban</span>
+        <ProjectSelect current={current} className="hidden lg:block" />
+        <nav className="hidden items-center gap-1 lg:flex">
+          <NavLinks current={current} inbox={inbox.data} />
         </nav>
         <div className="ml-auto flex items-center gap-3">
-          <SchedulerControl />
-          <a href="/api/docs" target="_blank" className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 text-xs flex items-center gap-1">
+          <div className="hidden lg:block">
+            <SchedulerControl />
+          </div>
+          <SchedulerBadge />
+          <a href="/api/docs" target="_blank" className="hidden lg:flex text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 text-xs items-center gap-1">
             <BookOpen size={13} /> API
           </a>
-          <span title={connected ? "Live updates connected" : "Reconnecting…"} className={clsx("h-2 w-2 rounded-full", connected ? "bg-emerald-500" : "bg-zinc-400 animate-pulse")} />
+          <LiveDot connected={connected} />
         </div>
       </header>
+      <NavDrawer open={menu} onClose={closeMenu} current={current} inbox={inbox.data} />
       <main className="min-h-0 flex-1 overflow-auto">{children}</main>
       <RunToasts />
       <ConnectClaudeModal />
     </div>
+  );
+}
+
+/** Small screens: running count and whether the scheduler is on, at a glance (the switch is in the menu). */
+function SchedulerBadge() {
+  const settings = useSettings();
+  const runs = useQuery({
+    queryKey: ["runs", "active"],
+    queryFn: () => unwrap(client.GET("/api/runs", { params: { query: { status: "active" } } })),
+    refetchInterval: 15000,
+  });
+  if (!settings.data) return null;
+  const on = settings.data.scheduler_enabled;
+  return (
+    <span
+      className={clsx("flex items-center gap-1 rounded-full px-2 py-0.5 text-xs lg:hidden", on ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-900")}
+      title={on ? "Scheduler on" : "Scheduler off"}
+    >
+      <Bot size={12} /> {runs.data?.length ?? 0}/{settings.data.max_concurrent_runs}
+    </span>
   );
 }
 

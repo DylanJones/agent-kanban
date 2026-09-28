@@ -68,6 +68,7 @@ enum Cmd {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,sqlx=warn,tower_http=warn".into()))
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stdout()))
         .init();
     let cli = Cli::parse();
     let default_bind: SocketAddr = std::env::var("AKB_BIND").ok().and_then(|b| b.parse().ok()).unwrap_or(([127, 0, 0, 1], 7878).into());

@@ -34,7 +34,7 @@ export function RunsPage() {
     refetchInterval: 10000,
   });
   return (
-    <div className="mx-auto max-w-6xl p-6 space-y-4">
+    <div className="mx-auto max-w-6xl p-3 space-y-4 md:p-6">
       <div className="flex items-center gap-3">
         <h1 className="text-xl font-semibold">Agent runs</h1>
         <select className={clsx(fieldCls, " py-1")} value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -49,21 +49,30 @@ export function RunsPage() {
       <div className="rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 divide-y divide-zinc-100 dark:divide-zinc-800">
         {runs.data?.length === 0 && <Empty>No runs yet. Turn on the scheduler or start a run from an issue.</Empty>}
         {runs.data?.map((r) => (
-          <Link key={r.id} to={`/runs/${r.id}`} className="flex items-center gap-3 px-3 py-2 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
-            <span className="w-12 font-mono text-xs text-zinc-500">#{r.id}</span>
+          // Wide screens: one row per run. Narrow: id, status, role, agent and numbers, then the issue, then the outcome.
+          <Link
+            key={r.id}
+            to={`/runs/${r.id}`}
+            className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-2 md:gap-x-3 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800/50 md:flex-nowrap"
+          >
+            <span className="font-mono text-xs text-zinc-500 md:w-12">#{r.id}</span>
             <Pill className={RUN_STATUS_STYLE[r.status]}>{r.status.replace("_", " ")}</Pill>
-            <span className="w-20 text-xs">{ROLE_LABEL[r.role]}</span>
-            <span className="w-20 text-xs text-zinc-500">{r.agent}</span>
-            <span className="flex-1 truncate">
+            <span className="text-xs md:w-20">{ROLE_LABEL[r.role]}</span>
+            <span className="text-xs text-zinc-500 md:w-20">{r.agent}</span>
+            <span className="min-w-0 truncate max-md:order-2 max-md:basis-full md:flex-1">
               <span className="text-zinc-500">
                 {r.project} #{r.issue}
               </span>{" "}
               {r.issue_title}
             </span>
-            <span className="max-w-72 truncate text-xs text-zinc-500">{r.error ?? r.outcome}</span>
-            <span className="w-14 text-right text-xs text-zinc-500 tabular-nums" title="tokens">{r.total_tokens > 0 ? fmtTokens(r.total_tokens) : ""}</span>
-            <span className="w-14 text-right text-xs text-zinc-500">{duration(r)}</span>
-            <span className="w-20 text-right text-xs text-zinc-500">
+            {(r.error ?? r.outcome) && (
+              <span className="min-w-0 truncate text-xs text-zinc-500 max-md:order-3 max-md:basis-full md:max-w-72">{r.error ?? r.outcome}</span>
+            )}
+            <span className="text-right text-xs text-zinc-500 tabular-nums max-md:ml-auto md:w-14" title="tokens">
+              {r.total_tokens > 0 ? fmtTokens(r.total_tokens) : ""}
+            </span>
+            <span className="text-right text-xs text-zinc-500 max-md:hidden md:w-14">{duration(r)}</span>
+            <span className="whitespace-nowrap text-right text-xs text-zinc-500 md:w-20">
               <TimeAgo iso={r.created_at} />
             </span>
           </Link>
@@ -118,16 +127,16 @@ export function RunDetail() {
   const agents = useQuery({ queryKey: ["agents"], queryFn: () => unwrap(client.GET("/api/agents")) });
   const settings = r ? summarizeSettings(agents.data?.find((a) => a.slug === r.agent), r.session_config as Record<string, unknown> | null) : "";
   return (
-    <div className="mx-auto max-w-4xl p-6 space-y-4">
+    <div className="mx-auto max-w-4xl p-3 space-y-4 md:p-6">
       <ErrorBox error={run.error} />
       {r && (
-        <div className="sticky top-0 z-10 -mx-6 -mt-6 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/95 dark:bg-zinc-950/95 px-6 py-3 backdrop-blur space-y-1">
-          <div className="flex items-center gap-2">
-            <h1 className="text-lg font-semibold">
+        <div className="sticky top-0 z-10 -mx-3 -mt-3 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/95 dark:bg-zinc-950/95 px-3 py-2 backdrop-blur space-y-1 md:-mx-6 md:-mt-6 md:px-6 md:py-3">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <h1 className="text-lg font-semibold whitespace-nowrap">
               {ROLE_LABEL[r.role]} run #{r.id}
             </h1>
             <Pill className={RUN_STATUS_STYLE[r.status]}>{r.status.replace("_", " ")}</Pill>
-            <span className="text-sm text-zinc-500">
+            <span className="min-w-0 text-sm text-zinc-500 max-md:order-last max-md:basis-full max-md:truncate">
               {r.agent} on{" "}
               <Link to={`/p/${r.project}/issues/${r.issue}`} className="text-blue-600">
                 #{r.issue} {r.issue_title}
@@ -149,8 +158,12 @@ export function RunDetail() {
               </Button>
             )}
           </div>
-          <div className="flex gap-3 text-xs text-zinc-500">
-            {r.worktree_path && <code title="worktree">{r.worktree_path}</code>}
+          <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-zinc-500">
+            {r.worktree_path && (
+              <code title={r.worktree_path} className="min-w-0 truncate max-md:hidden">
+                {r.worktree_path}
+              </code>
+            )}
             {r.container_name && <span>🐳 {r.container_name}</span>}
             {settings && <span title="model · effort this run used">⚙ {settings}</span>}
             {r.total_tokens > 0 && (
@@ -167,7 +180,7 @@ export function RunDetail() {
               <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> follow
             </label>
           </div>
-          {r.error && <div className="text-xs text-rose-600">{r.error}</div>}
+          {r.error && <div className="text-xs text-rose-600 break-words">{r.error}</div>}
         </div>
       )}
       <div className="space-y-2">

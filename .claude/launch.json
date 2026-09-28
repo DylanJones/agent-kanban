@@ -3,12 +3,7 @@
   "configurations": [
     {
       "name": "agent-kanban",
-      "runtimeExecutable": "./target/release/agent-kanban",
-      "runtimeArgs": [
-        "serve",
-        "--bind",
-        "0.0.0.0:7878"
-      ],
+      "url": "http://127.0.0.1:7878",
       "port": 7878
     },
     {

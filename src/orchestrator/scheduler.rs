@@ -52,6 +52,8 @@ pub enum RoleAvailability {
     NeedsAuth { slug: String },
     /// Runs in a container but the credential it needs there isn't configured.
     MissingCredential { slug: String, what: String },
+    /// Runs in a container but Docker isn't running.
+    NoDocker { slug: String },
     Paused { slug: String, kind: String, until: Option<String> },
     Unassigned,
 }
@@ -59,11 +61,13 @@ pub enum RoleAvailability {
 /// Resolve every role's agent and whether it can be dispatched, once per project.
 pub async fn role_availability(app: &AppState, project: &Project) -> anyhow::Result<HashMap<Role, RoleAvailability>> {
     let mut m = HashMap::new();
+    let docker_down = project.container_enabled && !crate::container::daemon_ready().await;
     for role in crate::domain::actor::ALL_ROLES {
         let avail = match agent_for(app, project, role).await? {
             None => RoleAvailability::Unassigned,
             Some(a) if !a.enabled => RoleAvailability::Disabled { slug: a.slug },
             Some(a) if a.needs_auth => RoleAvailability::NeedsAuth { slug: a.slug },
+            Some(a) if docker_down => RoleAvailability::NoDocker { slug: a.slug },
             Some(a)
                 if project.container_enabled
                     && a.harness == "claude"
@@ -163,6 +167,12 @@ pub fn next_step(
                 slug,
             )
         },
+        RoleAvailability::NoDocker { slug } => base(
+            "waiting",
+            format!("{} · waiting for Docker", role_title(role)),
+            Some("This project runs agents in containers and Docker isn't running. Runs start once it's up.".into()),
+            slug,
+        ),
         RoleAvailability::Paused { slug, kind, until } => NextStep {
             until: until.clone(),
             ..base("waiting", format!("{} · {slug} paused", role_title(role)), Some(format!("{slug} is paused ({kind}); it resumes automatically.")), slug)

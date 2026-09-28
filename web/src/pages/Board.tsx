@@ -3,7 +3,8 @@ import {
   type DragEndEvent,
   DragOverlay,
   type DragStartEvent,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   closestCorners,
   useDroppable,
   useSensor,
@@ -13,7 +14,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { AlertTriangle, Ban, Bot, Check, Clock, GitMerge, GitPullRequest, KeyRound, MessageSquare, Moon, Plus, Search, UserRound } from "lucide-react";
+import { AlertTriangle, Ban, Bot, Check, Clock, GitMerge, GitPullRequest, KeyRound, MessageSquare, Moon, Plus, Search, SlidersHorizontal, UserRound } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Outlet, useNavigate, useParams, useSearchParams } from "react-router";
 import { type Card as CardT, COLUMN_STATES, type IssueState, ROLE_LABEL, type Role, STATE_LABEL, api, client, unwrap } from "../api/client";
@@ -214,7 +215,13 @@ type CardProps = { schedulerOn: boolean; spotlight: Set<number> | null; onOpen: 
 function SortableCard({ card, schedulerOn, spotlight, onOpen }: CardProps & { card: CardT }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `card-${card.number}`, data: { card } });
   return (
-    <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 }} {...attributes} {...listeners}>
+    <div
+      ref={setNodeRef}
+      className="touch-manipulation select-none [-webkit-touch-callout:none]"
+      style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 }}
+      {...attributes}
+      {...listeners}
+    >
       <CardView card={card} onOpen={() => onOpen(card.number)} schedulerOn={schedulerOn} dim={!!spotlight && !spotlight.has(card.number)} />
     </div>
   );
@@ -266,7 +273,7 @@ function Column({ id, title, cards, dragging, ...rest }: CardProps & { id: strin
   const { setNodeRef, isOver } = useDroppable({ id: `col-${id}`, data: { column: id } });
   const sections = SECTIONS[id];
   return (
-    <div className="flex w-80 shrink-0 flex-col rounded-lg bg-zinc-100/80 dark:bg-zinc-900/50">
+    <div className="flex w-[85vw] max-w-80 shrink-0 snap-start flex-col rounded-lg bg-zinc-100/80 dark:bg-zinc-900/50 md:w-80">
       <div className="flex items-center gap-2 px-3 py-2 text-sm font-semibold">
         {title}
         <span className="rounded-full bg-zinc-200 dark:bg-zinc-800 px-1.5 text-xs font-normal text-zinc-600 dark:text-zinc-400">{cards.length}</span>
@@ -479,7 +486,12 @@ export default function BoardPage() {
   const [spotlightOn, setSpotlightOn] = useState(false);
   const spotlight = spotlightOn && board.data ? new Set(board.data.dispatchable) : null;
   const agents = useQuery({ queryKey: ["agents"], queryFn: () => unwrap(client.GET("/api/agents")) });
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  // Mouse drags start after a small movement. On touch, a swipe scrolls and a long press picks the card up.
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 300, tolerance: 8 } }),
+  );
+  const [showFilters, setShowFilters] = useState(false);
 
   const transition = useMutation({
     mutationFn: ({ n, to, reason }: { n: number; to: IssueState; reason?: string }) =>
@@ -536,6 +548,7 @@ export default function BoardPage() {
     rerank.mutate({ n: card.number, rank: (lo + hi) / 2 });
   };
 
+  const activeFilters = [filters.label, filters.badge, filters.agent, filters.running].filter(Boolean).length;
   const needsConnect = board.data?.columns.flatMap((c) => c.cards).filter((c) => c.next.action === "connect-claude").length ?? 0;
   const openCard = (n: number) => nav(`/p/${slug}/issues/${n}${window.location.search}`);
   const labels = board.data?.labels ?? [];
@@ -543,17 +556,25 @@ export default function BoardPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200 dark:border-zinc-800 px-4 py-2">
+      <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200 dark:border-zinc-800 px-3 py-2 md:px-4">
         <form
           onSubmit={(e) => {
             e.preventDefault();
             setFilter("q", q || undefined);
           }}
-          className="relative"
+          className="relative min-w-0 flex-1 md:flex-none"
         >
           <Search size={13} className="absolute left-2 top-2 text-zinc-400" />
-          <input className={clsx(fieldCls, "pl-7 w-56 py-1")} placeholder="Search or #number" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input className={clsx(fieldCls, "pl-7 w-full md:w-56 py-1")} placeholder="Search or #number" value={q} onChange={(e) => setQ(e.target.value)} />
         </form>
+        <Button className="md:hidden" onClick={() => setShowFilters((v) => !v)} title="Filters">
+          <SlidersHorizontal size={14} />
+          {activeFilters > 0 && <span className="rounded-full bg-blue-600 px-1.5 text-[10px] leading-4 text-white">{activeFilters}</span>}
+        </Button>
+        <Button variant="primary" className="md:hidden" onClick={() => setNewOpen(true)} title="New issue">
+          <Plus size={14} />
+        </Button>
+        <div className={clsx("flex w-full flex-wrap items-center gap-2 md:contents", !showFilters && "max-md:hidden")}>
         <select className={clsx(fieldCls, " py-1")} value={filters.label ?? ""} onChange={(e) => setFilter("label", e.target.value)}>
           <option value="">All labels</option>
           {labels.map((l) => (
@@ -580,12 +601,13 @@ export default function BoardPage() {
           <input type="checkbox" checked={!!filters.running} onChange={(e) => setFilter("running", e.target.checked ? "1" : undefined)} />
           Running
         </label>
+        </div>
         {pausedGroups.map((g) => (
           <Pill key={g.name} className="bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300" title={g.pause_reason ?? ""}>
             <Clock size={11} /> {g.name} paused{g.paused_until ? ` · resumes ${timeAgo(g.paused_until)}` : ""}
           </Pill>
         ))}
-        <div className="ml-auto">
+        <div className="ml-auto hidden md:block">
           <Button variant="primary" onClick={() => setNewOpen(true)}>
             <Plus size={14} /> New issue
           </Button>
@@ -599,7 +621,7 @@ export default function BoardPage() {
       <ErrorBox error={board.error} />
       {board.data && needsConnect > 0 && <ConnectBanner count={needsConnect} />}
       {board.data && <DispatchBanner board={board.data} spotlight={spotlightOn} setSpotlight={setSpotlightOn} onOpen={openCard} />}
-      <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto p-4">
+      <div className={clsx("flex min-h-0 flex-1 gap-3 overflow-x-auto p-3 md:p-4", !active && "max-md:snap-x max-md:snap-mandatory max-md:scroll-px-3")}>
         <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setActive(null)}>
           {board.data?.columns.map((c) => (
             <Column
