@@ -224,7 +224,7 @@ function LiveDot({ connected }: { connected: boolean }) {
 }
 
 /** Small screens: the nav lives in a drawer that slides in from the left. */
-function NavDrawer({ open, onClose, current, inbox, isHuman }: { open: boolean; onClose: () => void; current?: string; inbox?: number; isHuman?: boolean }) {
+export function NavDrawer({ open, onClose, current, inbox, isHuman }: { open: boolean; onClose: () => void; current?: string; inbox?: number; isHuman?: boolean }) {
   const { pathname } = useLocation();
   const panelRef = useRef<HTMLElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
