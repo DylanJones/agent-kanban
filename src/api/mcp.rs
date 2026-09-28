@@ -8,12 +8,13 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
+use base64::Engine;
 use serde_json::{Value, json};
 
 use crate::AppState;
 use crate::domain::{Actor, IssueState};
 use crate::error::ApiError;
-use crate::services::{self, comments, issues, pulls, reviews};
+use crate::services::{self, attachments, comments, issues, pulls, reviews};
 
 const PROTOCOL: &str = "2025-06-18";
 
@@ -85,6 +86,14 @@ pub fn tools() -> Vec<Value> {
                 "consequences": {"type": "string"},
             }),
             &["question"],
+        ),
+        tool(
+            "board_attach_image",
+            "Upload an image (e.g. a screenshot of a bug) and get back a markdown snippet. Paste the returned `markdown` into board_comment or an issue/PR body — this only uploads, it doesn't post anywhere by itself.",
+            json!({
+                "data_base64": {"type": "string", "description": "Image bytes, base64-encoded. PNG, JPEG, GIF or WebP; 10 MiB max decoded."},
+            }),
+            &["data_base64"],
         ),
         tool(
             "board_open_pr",
@@ -256,6 +265,14 @@ async fn call(cx: &Ctx, name: &str, a: &Value) -> Result<Value, ApiError> {
             };
             let i = issues::request_decision(app, p, cx.issue(a)?, &cx.actor, req).await?;
             json!({"number": i.number, "hold": i.hold, "note": "The issue is paused for a human. End your turn now."})
+        }
+        "board_attach_image" => {
+            let data = s(a, "data_base64").ok_or_else(|| ApiError::bad("data_base64 is required"))?;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(data.trim())
+                .map_err(|e| ApiError::bad(format!("invalid base64: {e}")))?;
+            let att = attachments::save(app, p, &cx.actor, bytes).await?;
+            json!({"url": att.url, "markdown": att.markdown})
         }
         "board_open_pr" => {
             let req = pulls::NewPull { title: s(a, "title").unwrap_or_default().into(), body: s(a, "body").unwrap_or_default().into(), issues: vec![], branch: None };

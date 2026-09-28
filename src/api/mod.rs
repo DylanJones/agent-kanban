@@ -2,6 +2,7 @@
 //! and interactive docs at `/api/docs`.
 
 pub mod agents;
+pub mod attachments;
 pub mod board;
 pub mod credentials;
 pub mod issues;
@@ -12,6 +13,7 @@ pub mod pulls;
 pub mod usage;
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::get;
 use utoipa::OpenApi;
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
@@ -96,6 +98,8 @@ pub fn router() -> (Router<AppState>, utoipa::openapi::OpenApi) {
         .routes(routes!(issues::list_comments, issues::add_comment))
         .routes(routes!(issues::events))
         .routes(routes!(issues::edit_comment, issues::delete_comment))
+        .routes(routes!(attachments::upload))
+        .routes(routes!(attachments::download))
         .routes(routes!(pulls::list, pulls::create))
         .routes(routes!(pulls::get, pulls::patch))
         .routes(routes!(pulls::diff))
@@ -144,5 +148,8 @@ pub fn app(state: AppState) -> Router {
         .route("/mcp", axum::routing::post(mcp::post).get(mcp::get))
         .fallback(crate::web::static_handler)
         .layer(tower_http::trace::TraceLayer::new_for_http())
+        // Bigger than axum's 2 MiB default: image uploads (10 MiB cap) plus base64 overhead for
+        // the MCP attachment tool, which posts the encoded image inside a JSON-RPC body.
+        .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
         .with_state(state)
 }

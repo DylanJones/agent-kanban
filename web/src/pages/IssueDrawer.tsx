@@ -4,6 +4,7 @@ import { Bot, GitMerge, GitPullRequest, Pause, Pencil, Play, X } from "lucide-re
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { type Comment, type IssueDetail, type IssueState, ROLE_LABEL, type Role, STATE_LABEL, api, client, unwrap } from "../api/client";
+import { ImageTextarea } from "../components/ImageTextarea";
 import { Button, ErrorBox, HoldBadge, LabelChip, Markdown, Pill, StateBadge, TimeAgo, fieldCls, inputCls } from "../components/ui";
 
 export function CommentView({ c }: { c: Comment }) {
@@ -211,6 +212,8 @@ export function IssueBody({ issue, slug }: { issue: IssueDetail; slug: string })
   const [body, setBody] = useState(issue.body);
   const [comment, setComment] = useState("");
   const [holdReason, setHoldReason] = useState("");
+  const [descUploading, setDescUploading] = useState(false);
+  const [commentUploading, setCommentUploading] = useState(false);
   const transition = useMutation({
     mutationFn: ({ to, reason }: { to: IssueState; reason?: string }) =>
       api("POST", `/api/projects/${slug}/issues/${issue.number}/transition`, { to, close_reason: reason }),
@@ -267,9 +270,9 @@ export function IssueBody({ issue, slug }: { issue: IssueDetail; slug: string })
         {editing ? (
           <div className="space-y-2">
             <input className={clsx(inputCls, "text-lg font-semibold")} value={title} onChange={(e) => setTitle(e.target.value)} />
-            <textarea className={clsx(inputCls, "font-mono h-64 text-xs")} value={body} onChange={(e) => setBody(e.target.value)} />
+            <ImageTextarea slug={slug} className={clsx(inputCls, "font-mono h-64 text-xs")} value={body} onChange={setBody} onPendingChange={setDescUploading} />
             <div className="flex gap-2">
-              <Button variant="primary" onClick={() => save.mutate()}>
+              <Button variant="primary" disabled={descUploading} onClick={() => save.mutate()}>
                 Save
               </Button>
               <Button onClick={() => setEditing(false)}>Cancel</Button>
@@ -316,9 +319,16 @@ export function IssueBody({ issue, slug }: { issue: IssueDetail; slug: string })
         <div className="space-y-2">{timeline.map((t) => t.el)}</div>
 
         <div className="space-y-2">
-          <textarea className={clsx(inputCls, "h-20")} placeholder="Comment (markdown)…" value={comment} onChange={(e) => setComment(e.target.value)} />
+          <ImageTextarea
+            slug={slug}
+            className={clsx(inputCls, "h-20")}
+            placeholder="Comment (markdown)…"
+            value={comment}
+            onChange={setComment}
+            onPendingChange={setCommentUploading}
+          />
           <div className="flex justify-end">
-            <Button variant="primary" disabled={!comment.trim() || addComment.isPending} onClick={() => addComment.mutate()}>
+            <Button variant="primary" disabled={!comment.trim() || addComment.isPending || commentUploading} onClick={() => addComment.mutate()}>
               Comment
             </Button>
           </div>

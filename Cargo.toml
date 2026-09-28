@@ -9,6 +9,7 @@ agent-client-protocol = { version = "2.2.0", features = ["unstable_end_turn_toke
 anyhow = "1"
 async-stream = "0.3"
 axum = { version = "0.8.9", features = ["macros"] }
+base64 = "0.22"
 axum-extra = { version = "0.12", features = ["cookie", "typed-header"] }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"

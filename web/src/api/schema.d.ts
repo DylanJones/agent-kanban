@@ -351,6 +351,44 @@ export interface paths {
         patch: operations["projects_patch"];
         trace?: never;
     };
+    "/api/projects/{p}/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload an image to attach to an issue or comment (PNG, JPEG, GIF or WebP; 10 MiB max).
+         * @description Returns a same-origin `url` and a ready-to-paste `markdown` snippet (`![](url)`). Works before
+         *     the issue it will be attached to exists — upload first, then include the markdown in the body.
+         */
+        post: operations["attachments_upload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{p}/attachments/{filename}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download an attached image. Requires the same login as everything else in the board. */
+        get: operations["attachments_download"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{p}/board": {
         parameters: {
             query?: never;
@@ -1228,6 +1266,18 @@ export interface components {
             last_used_at?: string | null;
             name: string;
             revoked_at?: string | null;
+        };
+        Attachment: {
+            /** Format: int64 */
+            byte_size: number;
+            content_type: string;
+            filename: string;
+            /** Format: int64 */
+            id: number;
+            /** @description Ready-to-paste markdown, e.g. `![](url)`. */
+            markdown: string;
+            /** @description Same-origin URL; requires the caller's normal login. */
+            url: string;
         };
         Board: {
             /** Format: int64 */
@@ -2708,6 +2758,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Project"];
+                };
+            };
+        };
+    };
+    attachments_upload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project slug */
+                p: string;
+            };
+            cookie?: never;
+        };
+        /** @description Raw image bytes */
+        requestBody: {
+            content: {
+                "application/octet-stream": number[];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Attachment"];
+                };
+            };
+        };
+    };
+    attachments_download: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project slug */
+                p: string;
+                filename: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Image bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
                 };
             };
         };

@@ -45,6 +45,17 @@ curl -sS -X POST "$AKB_API/projects/$P/issues/{{ issue or "N" }}/comments" "${H[
   -d '{"body":"Root cause: … Plan: …"}'
 ```
 
+## Attach an image
+
+Upload a screenshot (PNG, JPEG, GIF or WebP; 10 MiB max) and get back markdown to paste into a
+comment or issue body:
+
+```sh
+curl -sS -X POST "$AKB_API/projects/$P/attachments" "${H[@]}" -H 'Content-Type: image/png' --data-binary @screenshot.png
+```
+
+Response: `{"url": "...", "markdown": "![](...)", ...}`. Include the `markdown` in a comment or PATCH body — uploading alone doesn't post it anywhere. The board MCP tool `board_attach_image` does the same thing with a base64-encoded payload.
+
 ## Move your issue
 
 ```sh

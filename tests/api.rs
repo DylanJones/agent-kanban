@@ -5,11 +5,30 @@ mod common;
 use agent_kanban::auth::hash_token;
 use agent_kanban::domain::IssueState;
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderMap, Request, StatusCode};
+use base64::Engine;
 use common::*;
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
+
+/// A valid 1x1 transparent PNG.
+const TINY_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+async fn call_bytes(env: &Env, method: &str, path: &str, token: &str, ct: &str, body: Vec<u8>) -> (StatusCode, HeaderMap, Vec<u8>) {
+    let req = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", ct)
+        .body(Body::from(body))
+        .unwrap();
+    let resp = agent_kanban::api::app(env.app.clone()).oneshot(req).await.unwrap();
+    let status = resp.status();
+    let headers = resp.headers().clone();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes().to_vec();
+    (status, headers, bytes)
+}
 
 async fn call(env: &Env, method: &str, path: &str, token: &str, ct: &str, body: String) -> (StatusCode, Value) {
     let req = Request::builder()
@@ -279,4 +298,65 @@ async fn claude_container_token_flow() {
     assert_eq!(s, StatusCode::NO_CONTENT);
     let (_, v) = call(&env, "GET", "/api/credentials", &admin, "application/json", String::new()).await;
     assert_eq!(v["claude_token"], false);
+}
+
+#[tokio::test]
+async fn attachment_upload_and_download() {
+    let env = setup().await;
+    let admin = env.app.config.secrets.admin_token.clone();
+    let png = base64::engine::general_purpose::STANDARD.decode(TINY_PNG_B64).unwrap();
+
+    // Reject non-image bytes.
+    let (s, _, body) = call_bytes(&env, "POST", "/api/projects/demo/attachments", &admin, "application/octet-stream", b"not an image".to_vec()).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{}", String::from_utf8_lossy(&body));
+
+    // Reject oversized uploads (magic bytes are valid, but padded past the 10 MiB cap).
+    let mut oversized = png.clone();
+    oversized.extend(std::iter::repeat_n(0u8, 10 * 1024 * 1024 + 1 - oversized.len()));
+    let (s, _, _) = call_bytes(&env, "POST", "/api/projects/demo/attachments", &admin, "image/png", oversized).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+
+    // Upload succeeds and sniffs the real content type regardless of the request's Content-Type.
+    let (s, _, body) = call_bytes(&env, "POST", "/api/projects/demo/attachments", &admin, "application/octet-stream", png.clone()).await;
+    assert_eq!(s, StatusCode::CREATED, "{}", String::from_utf8_lossy(&body));
+    let v: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["content_type"], "image/png");
+    assert_eq!(v["byte_size"], png.len());
+    let url = v["url"].as_str().unwrap().to_string();
+    assert!(url.starts_with("/api/projects/demo/attachments/"), "{url}");
+    assert_eq!(v["markdown"], format!("![]({url})"));
+
+    // Download requires auth.
+    let (s, _, _) = call_bytes(&env, "GET", &url, "nope", "", vec![]).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+
+    // Download returns the exact bytes with a sniffed, nosniff-guarded content type.
+    let (s, headers, body) = call_bytes(&env, "GET", &url, &admin, "", vec![]).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(body, png);
+    assert_eq!(headers.get("content-type").unwrap(), "image/png");
+    assert_eq!(headers.get("x-content-type-options").unwrap(), "nosniff");
+
+    // An unknown filename 404s rather than leaking a path-traversal read.
+    let (s, _, _) =
+        call_bytes(&env, "GET", "/api/projects/demo/attachments/../../../../etc/passwd", &admin, "", vec![]).await;
+    assert!(s == StatusCode::NOT_FOUND || s == StatusCode::BAD_REQUEST, "{s}");
+
+    // A fix agent scoped to this project can also upload (e.g. attaching a screenshot) and the
+    // MCP board_attach_image tool round-trips to the same REST download endpoint.
+    let i = new_issue(&env, "Work", IssueState::InProgress).await;
+    let tok = agent_token(&env, i.id, "fix").await;
+    let (_, v) = mcp(
+        &env,
+        &tok,
+        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "board_attach_image", "arguments": {"data_base64": TINY_PNG_B64}}}),
+    )
+    .await;
+    assert_eq!(v["result"]["isError"], false, "{v}");
+    let text: Value = serde_json::from_str(v["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    let mcp_url = text["url"].as_str().unwrap().to_string();
+    let (s, headers, body) = call_bytes(&env, "GET", &mcp_url, &admin, "", vec![]).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(body, png);
+    assert_eq!(headers.get("content-type").unwrap(), "image/png");
 }

@@ -19,6 +19,7 @@ Send `-H "Authorization: Bearer $AKB_AUTH"` on every call. Full guide: `curl -s 
 - **Found an unrelated bug? File it immediately (`board_file_issue`), then continue your task** (don't fix it here):
   `curl -sS -X POST "$AKB_API/projects/{{ project.slug }}/issues" -H "Authorization: Bearer $AKB_AUTH" -H 'Content-Type: text/plain' --data-binary $'<title>\n<what, where (file:line), how to reproduce>'`
 - Comment on your issue: `POST $AKB_API/projects/{{ project.slug }}/issues/{{ issue.number }}/comments` `{"body": "..."}`
+- Attach an image (e.g. a screenshot): `board_attach_image`, or `POST $AKB_API/projects/{{ project.slug }}/attachments` with the raw bytes — both return markdown to paste into a comment or body
 - Move your issue: `POST $AKB_API/projects/{{ project.slug }}/issues/{{ issue.number }}/transition` `{"to": "...", "comment": "..."}`
 - Ask a human to decide (only for genuine language/design decisions not already answered in the thread):
   `POST $AKB_API/projects/{{ project.slug }}/issues/{{ issue.number }}/decision-request` `{"question": "...", "options": ["..."], "consequences": "..."}` — then stop.

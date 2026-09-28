@@ -1,6 +1,7 @@
 //! Domain services: every mutation goes through here so rules, audit events and bus
 //! notifications are applied consistently regardless of caller (API, scheduler, importer).
 
+pub mod attachments;
 pub mod cleanup;
 pub mod comments;
 pub mod issues;

@@ -19,6 +19,7 @@ import { useMemo, useState } from "react";
 import { Outlet, useNavigate, useParams, useSearchParams } from "react-router";
 import { type Card as CardT, COLUMN_STATES, type IssueState, ROLE_LABEL, type Role, STATE_LABEL, api, client, unwrap } from "../api/client";
 import { useConnectClaude } from "../components/ConnectClaude";
+import { ImageTextarea } from "../components/ImageTextarea";
 import { Button, ErrorBox, Field, HoldBadge, LabelChip, Modal, Pill, StateBadge, fieldCls, inputCls, timeAgo } from "../components/ui";
 
 const PRIORITY_STYLE: Record<string, string> = {
@@ -390,6 +391,7 @@ export function NewIssueModal({ slug, open, onClose }: { slug: string; open: boo
   const [labels, setLabels] = useState("bug");
   const [priority, setPriority] = useState("");
   const [state, setState] = useState<IssueState>("triage");
+  const [uploading, setUploading] = useState(false);
   const create = useMutation({
     mutationFn: () =>
       unwrap(
@@ -424,7 +426,7 @@ export function NewIssueModal({ slug, open, onClose }: { slug: string; open: boo
           <input autoFocus className={inputCls} value={title} onChange={(e) => setTitle(e.target.value)} />
         </Field>
         <Field label="Description (markdown)">
-          <textarea className={clsx(inputCls, "font-mono h-40")} value={body} onChange={(e) => setBody(e.target.value)} />
+          <ImageTextarea slug={slug} className={clsx(inputCls, "font-mono h-40")} value={body} onChange={setBody} onPendingChange={setUploading} />
         </Field>
         <div className="grid grid-cols-3 gap-3">
           <Field label="Labels (comma-separated)">
@@ -450,7 +452,7 @@ export function NewIssueModal({ slug, open, onClose }: { slug: string; open: boo
         </div>
         <ErrorBox error={create.error} />
         <div className="flex justify-end">
-          <Button variant="primary" disabled={!title.trim() || create.isPending}>
+          <Button variant="primary" disabled={!title.trim() || create.isPending || uploading}>
             Create issue
           </Button>
         </div>

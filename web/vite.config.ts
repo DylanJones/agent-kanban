@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -10,5 +11,8 @@ export default defineConfig({
       "/api": { target: "http://127.0.0.1:7878", changeOrigin: false },
       "/login": { target: "http://127.0.0.1:7878", changeOrigin: false },
     },
+  },
+  test: {
+    environment: "jsdom",
   },
 });

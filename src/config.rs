@@ -43,7 +43,7 @@ impl Config {
     pub fn load(data_dir: Option<PathBuf>, bind: SocketAddr, no_auth: bool) -> anyhow::Result<Self> {
         let data_dir = data_dir.unwrap_or_else(default_data_dir);
         std::fs::create_dir_all(&data_dir).with_context(|| format!("creating {}", data_dir.display()))?;
-        for sub in ["worktrees", "runs", "tmp"] {
+        for sub in ["worktrees", "runs", "tmp", "attachments"] {
             std::fs::create_dir_all(data_dir.join(sub))?;
         }
         let secrets = load_or_create_secrets(&data_dir.join("secrets.toml"))?;
@@ -81,6 +81,9 @@ impl Config {
     }
     pub fn tmp_dir(&self) -> PathBuf {
         self.data_dir.join("tmp")
+    }
+    pub fn attachments_dir(&self) -> PathBuf {
+        self.data_dir.join("attachments")
     }
     /// Re-read `secrets.toml`, so credentials added while the server runs (e.g. a Claude token
     /// for containers) take effect on the next run without a restart.

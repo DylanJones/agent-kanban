@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
-    "gen:api": "cargo run --quiet --manifest-path ../Cargo.toml -- openapi > openapi.json && openapi-typescript openapi.json -o src/api/schema.d.ts && rm openapi.json"
+    "gen:api": "cargo run --quiet --manifest-path ../Cargo.toml -- openapi > openapi.json && openapi-typescript openapi.json -o src/api/schema.d.ts && rm openapi.json",
+    "test": "vitest run"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -26,12 +27,17 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^26.6.3",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6.1.1",
+    "jsdom": "^30.1.1",
     "openapi-typescript": "^7.13.0",
     "tailwindcss": "^4.3.3",
     "typescript": "~5.9.3",
-    "vite": "^8.3.1"
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2"
   }
 }
