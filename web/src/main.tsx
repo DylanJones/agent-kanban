@@ -11,6 +11,7 @@ import IssueDrawer from "./pages/IssueDrawer";
 import ProjectSettings, { NewProjectPage } from "./pages/ProjectSettings";
 import PullPage from "./pages/PullPage";
 import { RunDetail, RunsPage } from "./pages/Runs";
+import UsagePage from "./pages/Usage";
 
 const qc = new QueryClient({
   defaultOptions: { queries: { staleTime: 5000, refetchOnWindowFocus: true, retry: 1 } },
@@ -37,6 +38,7 @@ function App() {
       <Route path="/runs" element={<Layout><RunsPage /></Layout>} />
       <Route path="/runs/:id" element={<Layout><RunDetail /></Layout>} />
       <Route path="/agents" element={<Layout><AgentsPage /></Layout>} />
+      <Route path="/usage" element={<Layout><UsagePage /></Layout>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

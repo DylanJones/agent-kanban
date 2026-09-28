@@ -181,3 +181,102 @@ async fn openapi_spec_and_guide() {
     assert_eq!(ops.len(), dedup.len(), "operationIds must be unique");
     assert!(v["paths"]["/api/projects/{p}/issues"]["post"]["requestBody"]["content"]["text/plain"].is_object());
 }
+
+async fn mcp(env: &Env, token: &str, body: Value) -> (StatusCode, Value) {
+    call(env, "POST", "/mcp", token, "application/json", body.to_string()).await
+}
+
+#[tokio::test]
+async fn mcp_tools_work_for_agent_runs() {
+    let env = setup().await;
+    let i = new_issue(&env, "Work", IssueState::Triage).await;
+    let tok = agent_token(&env, i.id, "triage").await;
+    let (s, v) = mcp(&env, &tok, json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}})).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["result"]["serverInfo"]["name"], "agent-kanban");
+    let (s, _) = mcp(&env, &tok, json!({"jsonrpc": "2.0", "method": "notifications/initialized"})).await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let (_, v) = mcp(&env, &tok, json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})).await;
+    let names: Vec<&str> = v["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"board_file_issue") && names.contains(&"board_submit_review"));
+
+    // File a side bug.
+    let (_, v) = mcp(&env, &tok, json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "board_file_issue", "arguments": {"title": "Side bug", "body": "found it"}}})).await;
+    assert_eq!(v["result"]["isError"], false, "{v}");
+    let created: Value = serde_json::from_str(v["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(created["state"], "triage");
+
+    // Invalid move reports the allowed states as a tool error (not a protocol error).
+    let (_, v) = mcp(&env, &tok, json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "board_move_issue", "arguments": {"to": "in_review"}}})).await;
+    assert_eq!(v["result"]["isError"], true);
+    assert!(v["result"]["content"][0]["text"].as_str().unwrap().contains("Allowed: backlog, ready, closed"));
+
+    // Valid move of the run's own issue.
+    let (_, v) = mcp(&env, &tok, json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "board_move_issue", "arguments": {"to": "ready", "comment": "Reproduced."}}})).await;
+    assert_eq!(v["result"]["isError"], false, "{v}");
+    assert_eq!(issue(&env, i.number).await.state, IssueState::Ready);
+
+    // Humans (non-run tokens) can't use the tools; unauthenticated requests are rejected.
+    let admin = env.app.config.secrets.admin_token.clone();
+    let (_, v) = mcp(&env, &admin, json!({"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "board_current_run", "arguments": {}}})).await;
+    assert!(v["error"].is_object());
+    let (s, _) = mcp(&env, "nope", json!({"jsonrpc": "2.0", "id": 7, "method": "tools/list"})).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn dedup_flow() {
+    let env = setup().await;
+    let orig = new_issue(&env, "Empty collection literal rejected as method argument", IssueState::Ready).await;
+    let other = new_issue(&env, "Unrelated", IssueState::Ready).await;
+    let dup = new_issue(&env, "Passing an empty collection literal argument fails", IssueState::Triage).await;
+    let tok = agent_token(&env, dup.id, "triage").await;
+
+    // Filing a similar bug returns likely duplicates.
+    let (s, v) = call(&env, "POST", "/api/projects/demo/issues", &tok, "text/plain", "Empty collection literal argument rejected\nrepro".into()).await;
+    assert_eq!(s, StatusCode::CREATED);
+    let dups: Vec<i64> = v["possible_duplicates"].as_array().unwrap().iter().map(|d| d["number"].as_i64().unwrap()).collect();
+    assert!(dups.contains(&orig.number), "{v}");
+    assert!(!dups.contains(&other.number));
+
+    // Triage may group other open issues under an umbrella (parent/labels only).
+    let (s, _) = call(&env, "PATCH", &format!("/api/projects/demo/issues/{}", orig.number), &tok, "application/json", json!({"parent": other.number}).to_string()).await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = call(&env, "PATCH", &format!("/api/projects/demo/issues/{}", orig.number), &tok, "application/json", json!({"title": "x"}).to_string()).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+
+    // Closing as a duplicate copies the report to the original.
+    let (s, v) = call(&env, "POST", &format!("/api/projects/demo/issues/{}/transition", dup.number), &tok, "application/json", json!({"to": "closed", "duplicate_of": orig.number}).to_string()).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["close_reason"], "duplicate");
+    let (_, o) = call(&env, "GET", &format!("/api/projects/demo/issues/{}", orig.number), &tok, "application/json", String::new()).await;
+    assert!(o["comments"].as_array().unwrap_or_else(|| panic!("{o}")).iter().any(|c| c["body"].as_str().unwrap().contains("closed as a duplicate of this issue")));
+}
+
+#[tokio::test]
+async fn claude_container_token_flow() {
+    let env = setup().await;
+    let admin = env.app.config.secrets.admin_token.clone();
+    let (_, v) = call(&env, "GET", "/api/credentials", &admin, "application/json", String::new()).await;
+    assert_eq!(v["claude_token"], false);
+    let (s, _) = call(&env, "PUT", "/api/credentials/claude-token", &admin, "application/json", json!({"token": "not a token"}).to_string()).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    // No project uses containers, so nothing to verify against: saved directly.
+    let (s, v) = call(&env, "PUT", "/api/credentials/claude-token", &admin, "application/json", json!({"token": "sk-ant-oat01-test"}).to_string()).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["saved"], true);
+    let (_, v) = call(&env, "GET", "/api/credentials", &admin, "application/json", String::new()).await;
+    assert_eq!(v["claude_token"], true);
+    assert!(!v.to_string().contains("sk-ant-oat01-test"), "the secret is never returned");
+    let saved = std::fs::read_to_string(env.app.config.data_dir.join("secrets.toml")).unwrap();
+    assert!(saved.contains("sk-ant-oat01-test") && saved.contains(&admin), "admin token preserved");
+    // Agents can't set credentials.
+    let i = new_issue(&env, "Work", IssueState::Ready).await;
+    let tok = agent_token(&env, i.id, "fix").await;
+    let (s, _) = call(&env, "PUT", "/api/credentials/claude-token", &tok, "application/json", json!({"token": "sk-ant-x"}).to_string()).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, _) = call(&env, "DELETE", "/api/credentials/claude-token", &admin, "application/json", String::new()).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (_, v) = call(&env, "GET", "/api/credentials", &admin, "application/json", String::new()).await;
+    assert_eq!(v["claude_token"], false);
+}

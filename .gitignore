@@ -4,3 +4,4 @@
 /web/*.tsbuildinfo
 .DS_Store
 /.dev-data
+/web/openapi.json

@@ -16,6 +16,7 @@ pub mod github;
 pub mod jobs;
 pub mod orchestrator;
 pub mod services;
+pub mod usage;
 pub mod web;
 
 use std::sync::Arc;
@@ -53,6 +54,8 @@ impl AppState {
         orchestrator::start(self);
         git::scanner::spawn(self.clone());
         jobs::spawn_worker(self.clone());
+        let app = self.clone();
+        tokio::spawn(async move { usage::backfill(&app).await });
         Ok(())
     }
 }

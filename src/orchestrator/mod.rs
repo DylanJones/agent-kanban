@@ -26,7 +26,7 @@ pub async fn reconcile(app: &AppState) -> anyhow::Result<()> {
         tracing::info!("marked {n} runs interrupted");
     }
     sqlx::query("UPDATE permission_requests SET status = 'expired' WHERE status = 'pending'").execute(&app.db).await?;
-    crate::container::sweep_orphans().await;
+    crate::container::sweep_orphans(&app.config.instance_id()).await;
 
     // Remove ephemeral (detached) worktrees and any whose issue is no longer active.
     let wts = sqlx::query_as::<_, Worktree>(

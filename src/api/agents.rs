@@ -41,6 +41,28 @@ pub struct AgentInput {
     pub session_mode_id: Option<String>,
     pub container_session_mode_id: Option<String>,
     pub enabled: Option<bool>,
+    /// Default session settings to merge in (option id → value; null removes), e.g.
+    /// `{"model": "opus", "effort": "xhigh"}`. Valid ids/values are in `config_options`.
+    #[schema(value_type = Option<std::collections::HashMap<String, Object>>)]
+    pub session_config: Option<BTreeMap<String, serde_json::Value>>,
+}
+
+/// Check a session setting against the options the agent last reported (if known).
+pub fn validate_setting(agent: &AgentDefinition, id: &str, value: &serde_json::Value) -> ApiResult<()> {
+    let Some(opts) = agent.config_options.as_ref().and_then(|o| o.0.as_array().cloned()) else {
+        return Ok(()); // not discovered yet; the run reports anything it can't apply
+    };
+    let Some(opt) = opts.iter().find(|o| o.get("id").and_then(serde_json::Value::as_str) == Some(id)) else {
+        let ids: Vec<&str> = opts.iter().filter_map(|o| o.get("id").and_then(serde_json::Value::as_str)).collect();
+        return Err(ApiError::bad(format!("{} has no `{id}` setting (it has: {})", agent.name, ids.join(", "))));
+    };
+    if let serde_json::Value::String(v) = value {
+        let values = crate::acp::option_values(opt);
+        if !values.is_empty() && !values.iter().any(|x| x == v) {
+            return Err(ApiError::bad(format!("`{v}` isn't a {} option for {} (choices: {})", id, agent.name, values.join(", "))));
+        }
+    }
+    Ok(())
 }
 
 async fn agent(app: &AppState, slug: &str) -> ApiResult<AgentDefinition> {
@@ -151,6 +173,22 @@ pub async fn patch(
     set!(req.session_mode_id.as_ref().map(|s| (!s.is_empty()).then(|| s.clone())), "session_mode_id");
     set!(req.container_session_mode_id.as_ref().map(|s| (!s.is_empty()).then(|| s.clone())), "container_session_mode_id");
     set!(req.enabled, "enabled");
+    if let Some(changes) = &req.session_config {
+        let mut cfg = a.session_config.0.clone();
+        for (k, v) in changes {
+            if v.is_null() {
+                cfg.remove(k);
+            } else {
+                validate_setting(&a, k, v)?;
+                cfg.insert(k.clone(), v.clone());
+            }
+        }
+        sqlx::query("UPDATE agent_definitions SET session_config = ? WHERE id = ?")
+            .bind(serde_json::to_string(&cfg).unwrap())
+            .bind(a.id)
+            .execute(&app.db)
+            .await?;
+    }
     if let Some(g) = &req.limit_group {
         sqlx::query("INSERT OR IGNORE INTO limit_groups(name, updated_at) VALUES (?, ?)").bind(g).bind(db::now()).execute(&app.db).await?;
     }
@@ -178,6 +216,8 @@ pub struct TestRequest {
     /// Also send a tiny prompt (uses a little quota) to check the subscription works.
     #[serde(default)]
     pub prompt: bool,
+    /// Test the way this project launches agents (e.g. inside its container).
+    pub project: Option<String>,
 }
 
 /// Start the adapter, perform the ACP handshake (and optionally a one-line prompt), and report what happened.
@@ -189,10 +229,17 @@ pub async fn test(
     body: Option<Json<TestRequest>>,
 ) -> ApiResult<Json<probe::AgentTestResult>> {
     let a = agent(&app, &slug).await?;
-    let with_prompt = body.map(|b| b.0.prompt).unwrap_or(false);
+    let req = body.map(|b| b.0).unwrap_or_default();
+    let with_prompt = req.prompt;
+    let project = match &req.project {
+        Some(p) => Some(services::project(&app.db, p).await?),
+        None => None,
+    };
     let r = probe::session_check(
         &app,
         &a,
+        project.as_ref(),
+        vec![],
         with_prompt.then_some("Reply with exactly: OK"),
         Duration::from_secs(if with_prompt { 180 } else { 120 }),
     )
@@ -263,6 +310,10 @@ pub struct RunView {
     pub pr: Option<i64>,
     /// True while the run's task is alive in this server process.
     pub live: bool,
+    /// Tokens used by this run (all models).
+    pub total_tokens: i64,
+    pub models: Vec<String>,
+    pub cost_usd: Option<f64>,
 }
 
 async fn run_view(app: &AppState, run: AgentRun) -> ApiResult<RunView> {
@@ -281,7 +332,14 @@ async fn run_view(app: &AppState, run: AgentRun) -> ApiResult<RunView> {
         Some(p) => sqlx::query_scalar("SELECT number FROM pull_requests WHERE id = ?").bind(p).fetch_optional(&app.db).await?,
         None => None,
     };
-    Ok(RunView { live: app.runs.is_live(run.id), agent, project, issue, issue_title, pr, run })
+    let (total_tokens, models, cost_usd): (i64, Option<String>, Option<f64>) = sqlx::query_as(
+        "SELECT COALESCE(SUM(total_tokens),0), GROUP_CONCAT(model, ','), SUM(cost_usd) FROM run_usage WHERE run_id = ?",
+    )
+    .bind(run.id)
+    .fetch_one(&app.db)
+    .await?;
+    let models = models.map(|m| m.split(',').map(str::to_string).collect()).unwrap_or_default();
+    Ok(RunView { live: app.runs.is_live(run.id), agent, project, issue, issue_title, pr, run, total_tokens, models, cost_usd })
 }
 
 #[derive(Debug, Deserialize, IntoParams)]

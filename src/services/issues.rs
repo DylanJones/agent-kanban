@@ -60,6 +60,10 @@ pub struct TransitionRequest {
     pub comment: Option<String>,
     /// For `closed`: `duplicate`, `invalid`, `wontfix`, `not_planned`...
     pub close_reason: Option<String>,
+    /// For duplicates: the issue this one duplicates. Its thread gets a note with this report,
+    /// so any new repro details aren't lost. Implies `close_reason: duplicate`.
+    #[serde(default)]
+    pub duplicate_of: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -96,6 +100,53 @@ pub struct CreatedIssue {
     /// API URL of the issue.
     pub api_url: String,
     pub state: IssueState,
+    /// Open or recently closed issues with similar titles. If one is the same bug, comment there
+    /// instead (triage closes true duplicates).
+    pub possible_duplicates: Vec<SimilarIssue>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct SimilarIssue {
+    pub number: i64,
+    pub title: String,
+    pub state: IssueState,
+}
+
+fn title_words(t: &str) -> std::collections::HashSet<String> {
+    const STOP: &[&str] = &["with", "when", "that", "from", "into", "this", "does", "doesn", "should", "fails", "error", "compiler"];
+    t.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.chars().count() >= 4 && !STOP.contains(w))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Issues whose titles share enough significant words with `title` (open, or closed in the last 60 days).
+pub async fn similar_issues(app: &AppState, project_id: i64, title: &str, exclude: Option<i64>) -> sqlx::Result<Vec<SimilarIssue>> {
+    let words = title_words(title);
+    if words.is_empty() {
+        return Ok(vec![]);
+    }
+    let cutoff = db::fmt_time(chrono::Utc::now() - chrono::Duration::days(60));
+    let rows: Vec<(i64, String, IssueState)> = sqlx::query_as(
+        "SELECT number, title, state FROM issues WHERE project_id = ? AND (state NOT IN ('done','closed') OR COALESCE(closed_at, updated_at) >= ?)",
+    )
+    .bind(project_id)
+    .bind(&cutoff)
+    .fetch_all(&app.db)
+    .await?;
+    let mut scored: Vec<(f64, SimilarIssue)> = rows
+        .into_iter()
+        .filter(|(n, _, _)| Some(*n) != exclude)
+        .filter_map(|(number, t, state)| {
+            let other = title_words(&t);
+            let shared = words.intersection(&other).count();
+            let jaccard = shared as f64 / words.union(&other).count().max(1) as f64;
+            (shared >= 2 && jaccard >= 0.2).then_some((jaccard, SimilarIssue { number, title: t, state }))
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(scored.into_iter().take(5).map(|(_, s)| s).collect())
 }
 
 fn validate_priority(p: &Option<String>) -> ApiResult<Option<String>> {
@@ -112,6 +163,10 @@ fn validate_size(s: &Option<String>) -> ApiResult<Option<String>> {
         Some(v @ ("XS" | "S" | "M" | "L" | "XL")) => Ok(Some(v.to_string())),
         Some(v) => Err(ApiError::bad(format!("size must be XS, S, M, L or XL, got `{v}`"))),
     }
+}
+
+fn services_check_project(actor: &Actor, project: &Project) -> ApiResult<()> {
+    ensure_project_access(actor, project)
 }
 
 pub fn issue_url(app: &AppState, project: &Project, number: i64) -> String {
@@ -194,13 +249,31 @@ pub async fn create(app: &AppState, project: &Project, actor: &Actor, new: NewIs
         url: issue_url(app, project, number),
         api_url: format!("{}/projects/{}/issues/{}", app.config.api_url(), project.slug, number),
         state,
+        possible_duplicates: similar_issues(app, project.id, &title, Some(number)).await.unwrap_or_default(),
     })
 }
 
 pub async fn update(app: &AppState, project: &Project, number: i64, actor: &Actor, patch: IssuePatch) -> ApiResult<Issue> {
     let issue = super::issue(&app.db, project.id, number).await?;
-    // Agents may triage (label/prioritise) their own issue, and label issues they filed.
-    ensure_issue_access(actor, &issue)?;
+    // Agents edit their own issue. Triage agents may also organise other open issues (group them
+    // under an umbrella issue, add labels), but not rewrite them.
+    if let (Actor::Agent { role: crate::domain::Role::Triage, issue_id, .. }, false) = (actor, ensure_issue_access(actor, &issue).is_ok()) {
+        let organising_only = patch.title.is_none()
+            && patch.body.is_none()
+            && patch.labels.is_none()
+            && patch.priority.is_none()
+            && patch.size.is_none()
+            && patch.estimate.is_none()
+            && patch.rank.is_none()
+            && patch.start_date.is_none()
+            && patch.target_date.is_none();
+        if !organising_only || issue.state.is_terminal() || issue_id.is_none() {
+            return Err(ApiError::forbidden("triage agents may only set `parent` or `add_labels` on other open issues"));
+        }
+        services_check_project(actor, project)?;
+    } else {
+        ensure_issue_access(actor, &issue)?;
+    }
     let mut tx = begin_write(&app.db).await?;
     let now = db::now();
     if let Some(t) = &patch.title {
@@ -295,12 +368,44 @@ pub async fn transition(app: &AppState, project: &Project, number: i64, actor: &
                 }
             }
         }
-        if to == IssueState::Closed && req.close_reason.is_none() && req.comment.is_none() {
-            return Err(ApiError::bad("closing requires `close_reason` or a `comment` explaining why"));
+        if to == IssueState::Closed && req.close_reason.is_none() && req.comment.is_none() && req.duplicate_of.is_none() {
+            return Err(ApiError::bad("closing requires `close_reason`, `duplicate_of`, or a `comment` explaining why"));
         }
     }
 
-    set_state(app, project, &issue, to, actor, req.comment.as_deref(), req.close_reason.as_deref()).await?;
+    let mut close_reason = req.close_reason.clone();
+    let mut comment = req.comment.clone();
+    let original = match req.duplicate_of {
+        Some(n) if to == IssueState::Closed => {
+            if n == number {
+                return Err(ApiError::bad("an issue can't duplicate itself"));
+            }
+            let orig = super::issue(&app.db, project.id, n).await.map_err(|_| ApiError::bad(format!("duplicate_of: issue #{n} not found")))?;
+            close_reason = Some("duplicate".into());
+            let note = format!("Duplicate of #{n}.");
+            comment = Some(match comment {
+                Some(c) if !c.trim().is_empty() => format!("{note} {c}"),
+                _ => note,
+            });
+            Some(orig)
+        }
+        Some(_) => return Err(ApiError::bad("duplicate_of only applies when moving to `closed`")),
+        None => None,
+    };
+    set_state(app, project, &issue, to, actor, comment.as_deref(), close_reason.as_deref()).await?;
+    if let Some(orig) = original {
+        // Keep the duplicate's report on the original so new repro details aren't lost.
+        let body = format!(
+            "#{} ({}) was closed as a duplicate of this issue.\n\n<details><summary>Its report</summary>\n\n{}\n\n</details>",
+            issue.number,
+            issue.title,
+            issue.body.trim()
+        );
+        let mut tx = begin_write(&app.db).await?;
+        comments::insert(&mut tx, project.id, comments::Target::Issue(orig.id), &Actor::System, "system", &body).await?;
+        tx.commit().await?;
+        app.bus.issue(&project.slug, orig.number);
+    }
     super::issue(&app.db, project.id, number).await
 }
 
@@ -373,7 +478,7 @@ pub async fn set_state(
     tx.commit().await?;
     app.bus.issue(&project.slug, issue.number);
 
-    cleanup::on_state_change(app, project, issue, from, to).await;
+    cleanup::on_state_change(app, project, issue, from, to, actor.run_id()).await;
     Ok(())
 }
 

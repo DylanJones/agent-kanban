@@ -40,7 +40,10 @@ impl Config {
             std::fs::create_dir_all(data_dir.join(sub))?;
         }
         let secrets = load_or_create_secrets(&data_dir.join("secrets.toml"))?;
-        let public_url = format!("http://{bind}");
+        // Agents and links on this machine always use loopback; binding to all interfaces
+        // (0.0.0.0) just makes the server reachable from other machines too.
+        let host = if bind.ip().is_unspecified() || bind.ip().is_loopback() { "127.0.0.1".to_string() } else { bind.ip().to_string() };
+        let public_url = format!("http://{host}:{}", bind.port());
         let container_url = format!("http://host.docker.internal:{}", bind.port());
         Ok(Config { data_dir, bind, public_url, container_url, no_auth, secrets })
     }
@@ -57,6 +60,22 @@ impl Config {
     pub fn tmp_dir(&self) -> PathBuf {
         self.data_dir.join("tmp")
     }
+    /// Re-read `secrets.toml`, so credentials added while the server runs (e.g. a Claude token
+    /// for containers) take effect on the next run without a restart.
+    pub fn current_secrets(&self) -> Secrets {
+        std::fs::read_to_string(self.data_dir.join("secrets.toml"))
+            .ok()
+            .and_then(|t| toml::from_str(&t).ok())
+            .unwrap_or_else(|| self.secrets.clone())
+    }
+
+    /// Identifies this server instance (by data dir) on resources it creates, e.g. container labels,
+    /// so several instances on one machine never clean up each other's containers.
+    pub fn instance_id(&self) -> String {
+        use sha2::Digest;
+        hex::encode(&sha2::Sha256::digest(self.data_dir.to_string_lossy().as_bytes())[..6])
+    }
+
     pub fn api_url(&self) -> String {
         format!("{}/api", self.public_url)
     }

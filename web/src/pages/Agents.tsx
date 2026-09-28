@@ -3,7 +3,9 @@ import clsx from "clsx";
 import { Clock, FlaskConical, Pause, Pencil, Play, Plus, Zap } from "lucide-react";
 import { useState } from "react";
 import { type AgentDefinition, type LimitGroup, ROLE_LABEL, type Role, type S, api, client, unwrap } from "../api/client";
+import { useConnectClaude, useCredentials } from "../components/ConnectClaude";
 import { useSettings } from "../components/Layout";
+import { SettingSelects, agentOptions } from "../components/SessionSettings";
 import { Button, ErrorBox, Field, Modal, Pill, TimeAgo, inputCls } from "../components/ui";
 
 function SettingsCard() {
@@ -242,6 +244,35 @@ function TestResult({ r }: { r: S["AgentTestResult"] }) {
   );
 }
 
+function AgentSettings({ a, onLoad, loading }: { a: AgentDefinition; onLoad: () => void; loading: boolean }) {
+  const qc = useQueryClient();
+  const opts = agentOptions(a);
+  const patch = useMutation({
+    mutationFn: (session_config: Record<string, unknown>) => api("PATCH", `/api/agents/${a.slug}`, { session_config }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["agents"] }),
+  });
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-2 pl-28">
+      {opts.length ? (
+        <>
+          <SettingSelects
+            options={opts}
+            values={a.session_config as Record<string, unknown>}
+            onChange={(id, v) => patch.mutate({ [id]: v })}
+            inheritLabel={() => "adapter default"}
+          />
+          <span className="text-[11px] text-zinc-400">defaults for every run; projects can override per role</span>
+        </>
+      ) : (
+        <Button size="sm" variant="ghost" onClick={onLoad} disabled={loading}>
+          {loading ? "Loading…" : "Load model & effort options"}
+        </Button>
+      )}
+      {patch.error ? <span className="text-xs text-rose-600">{(patch.error as Error).message}</span> : null}
+    </div>
+  );
+}
+
 function AgentRow({ a }: { a: AgentDefinition }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
@@ -273,10 +304,64 @@ function AgentRow({ a }: { a: AgentDefinition }) {
           <Pencil size={11} />
         </Button>
       </div>
+      <AgentSettings a={a} onLoad={() => test.mutate(false)} loading={test.isPending} />
       {test.data && <TestResult r={test.data} />}
       <ErrorBox error={test.error} />
       {editing && <AgentForm agent={a} onClose={() => setEditing(false)} />}
     </div>
+  );
+}
+
+function CredentialsCard() {
+  const qc = useQueryClient();
+  const creds = useCredentials();
+  const connect = useConnectClaude();
+  const remove = useMutation({ mutationFn: () => api("DELETE", "/api/credentials/claude-token"), onSuccess: () => qc.invalidateQueries() });
+  const c = creds.data;
+  if (!c) return null;
+  const row = (name: string, ok: boolean, detail: string, actions: React.ReactNode) => (
+    <div className="flex items-center gap-3 px-3 py-2 text-sm">
+      <span className="w-40 font-medium">{name}</span>
+      {ok ? (
+        <Pill className="bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">configured</Pill>
+      ) : (
+        <Pill className={c.container_projects.length ? "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800"}>missing</Pill>
+      )}
+      <span className="flex-1 text-xs text-zinc-500">{detail}</span>
+      {actions}
+    </div>
+  );
+  return (
+    <section className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
+      <div className="flex items-center border-b border-zinc-200 dark:border-zinc-800 px-3 py-2">
+        <h2 className="font-semibold">Container credentials</h2>
+        <span className="ml-2 text-xs text-zinc-500">
+          {c.container_projects.length ? `Used by ${c.container_projects.join(", ")}` : "No project runs agents in containers"}
+        </span>
+      </div>
+      <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+        {row(
+          "Claude",
+          c.claude_token,
+          "Long-lived token from `claude setup-token`; on the host Claude uses your Keychain login instead.",
+          c.claude_token ? (
+            <>
+              <Button size="sm" onClick={connect}>
+                Replace
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => confirm("Remove Claude's container token?") && remove.mutate()}>
+                Remove
+              </Button>
+            </>
+          ) : (
+            <Button size="sm" variant="primary" onClick={connect}>
+              Connect Claude
+            </Button>
+          ),
+        )}
+        {row("Codex", c.codex_auth, "~/.codex/auth.json is mounted into Codex containers (sign in with the Codex app or CLI to create it).", null)}
+      </div>
+    </section>
   );
 }
 
@@ -287,6 +372,7 @@ export default function AgentsPage() {
   return (
     <div className="mx-auto max-w-6xl p-6 space-y-6">
       <SettingsCard />
+      <CredentialsCard />
       <section className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
         <div className="flex items-center border-b border-zinc-200 dark:border-zinc-800 px-3 py-2">
           <h2 className="font-semibold">Subscriptions</h2>

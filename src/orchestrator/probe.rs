@@ -26,18 +26,25 @@ pub struct AgentTestResult {
     /// `quota`, `rate`, `auth` if a limit was detected.
     pub limit: Option<String>,
     pub stderr_tail: String,
+    /// Settings the agent offers (ACP `configOptions`), also cached on the agent.
+    #[schema(value_type = Option<Vec<Object>>)]
+    pub config_options: Option<Value>,
 }
 
 /// Start the adapter in a scratch dir; optionally send a prompt. Never touches a repository.
+/// `project`: run it the way that project's runs are launched (e.g. in its container).
+/// `extra_env`: extra environment, e.g. a credential being tested before it's saved.
 pub async fn session_check(
     app: &AppState,
     agent: &AgentDefinition,
+    project: Option<&crate::domain::models::Project>,
+    extra_env: Vec<(String, String)>,
     prompt: Option<&str>,
     timeout: Duration,
 ) -> anyhow::Result<AgentTestResult> {
     let dir = app.config.tmp_dir().join(format!("probe-{}", agent.slug));
     tokio::fs::create_dir_all(&dir).await?;
-    let plan = super::run::plan_launch(app, None, agent, 0, &dir, vec![]).await?;
+    let plan = super::run::plan_launch(app, project, agent, 0, &dir, extra_env).await?;
     let mut child = acp::spawn(&plan.launch)?;
     let (out_tx, mut out_rx) = mpsc::unbounded_channel();
     let (ctl_tx, ctl_rx) = mpsc::unbounded_channel();
@@ -48,12 +55,13 @@ pub async fn session_check(
         child.stderr.take(),
         dir.clone(),
         plan.mode.clone(),
+        acp::SessionExtras { config: agent.session_config.0.clone().into_iter().collect(), ..Default::default() },
         out_tx,
         ctl_rx,
         cancel.clone(),
     ));
     let mut res =
-        AgentTestResult { ok: false, agent_info: None, modes: None, reply: None, error: None, limit: None, stderr_tail: String::new() };
+        AgentTestResult { ok: false, agent_info: None, modes: None, reply: None, error: None, limit: None, stderr_tail: String::new(), config_options: None };
     let mut reply = String::new();
     let mut stderr: Vec<String> = vec![];
     let mut meta: Option<Value> = None;
@@ -89,6 +97,10 @@ pub async fn session_check(
                     }
                 }
                 Out::Stderr(l) => stderr.push(l),
+                Out::Config { options, .. } => {
+                    super::run::remember_config_options(app, agent.id, &options).await;
+                    res.config_options = Some(options);
+                }
                 Out::Permission { reply, .. } => {
                     let _ = reply.send(None);
                 }
@@ -159,7 +171,7 @@ pub async fn probe_group(app: &AppState, group: &str) -> anyhow::Result<bool> {
             .fetch_optional(&app.db)
             .await?
             .ok_or_else(|| anyhow::anyhow!("no enabled agent in group {group}"))?;
-    let r = session_check(app, &agent, Some("Reply with exactly: OK"), Duration::from_secs(120)).await?;
+    let r = session_check(app, &agent, None, vec![], Some("Reply with exactly: OK"), Duration::from_secs(120)).await?;
     if r.ok {
         return Ok(true);
     }

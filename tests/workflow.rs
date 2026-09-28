@@ -340,3 +340,33 @@ async fn allowlist_answers_permission_prompts() {
     assert_eq!(v["ninja -C build tests"], "allow");
     assert_eq!(v["git push origin HEAD"], "reject");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_settings_apply_defaults_and_role_overrides() {
+    let env = setup().await;
+    fake_agent(&env.app, "f-triage", "triage", "fake").await;
+    // Agent default: big model. Project override for triage: high effort, and a bogus value that's skipped.
+    sqlx::query("UPDATE agent_definitions SET session_config = ? WHERE slug = 'f-triage'")
+        .bind(serde_json::json!({"model": "big", "effort": "low"}).to_string())
+        .execute(&env.app.db)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO role_session_config(project_id, role, agent_definition_id, config) SELECT ?, 'triage', id, ? FROM agent_definitions WHERE slug = 'f-triage'")
+        .bind(env.project.id)
+        .bind(serde_json::json!({"effort": "high", "speed": "warp"}).to_string())
+        .execute(&env.app.db)
+        .await
+        .unwrap();
+    let i = new_issue(&env, "Settings", IssueState::Triage).await;
+    let r = run(&env, i.number, Role::Triage, "f-triage").await;
+    assert_eq!(r.status, "succeeded", "{}", transcript(&env, r.id).await);
+    let used = r.session_config.unwrap().0;
+    assert_eq!(used["model"], "big");
+    assert_eq!(used["effort"], "high", "role override beats agent default");
+    let t = transcript(&env, r.id).await;
+    assert!(t.contains("model: Big · effort: High"), "{t}");
+    assert!(t.contains("couldn't set `speed`"), "unknown settings are reported, not fatal");
+    // The agent's options were cached for the UI.
+    let a = agent(&env, "f-triage").await;
+    assert_eq!(a.config_options.unwrap().0.as_array().unwrap().len(), 3);
+}

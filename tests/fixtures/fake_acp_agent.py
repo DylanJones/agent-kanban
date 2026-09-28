@@ -27,6 +27,12 @@ MODE = os.environ.get("FAKE_MODE", "noop")
 cancelled = threading.Event()
 out_lock = threading.Lock()
 pending = {}  # request id -> [Event, response]
+# Session settings, shaped like the real adapters' ACP configOptions.
+CONFIG = [
+    {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": "default", "options": [{"value": "default", "name": "Default"}]},
+    {"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "small", "options": [{"value": "small", "name": "Small"}, {"value": "big", "name": "Big"}]},
+    {"id": "effort", "name": "Effort", "category": "thought_level", "type": "select", "currentValue": "low", "options": [{"value": "low", "name": "Low"}, {"value": "high", "name": "High"}]},
+]
 
 
 def send(msg):
@@ -160,7 +166,12 @@ def main():
         if m == "initialize":
             send({"jsonrpc": "2.0", "id": msg["id"], "result": {"protocolVersion": 1, "agentCapabilities": {}, "authMethods": [], "agentInfo": {"name": "fake", "version": "0"}}})
         elif m == "session/new":
-            send({"jsonrpc": "2.0", "id": msg["id"], "result": {"sessionId": "s1", "modes": {"currentModeId": "default", "availableModes": [{"id": "default", "name": "Default"}]}}})
+            send({"jsonrpc": "2.0", "id": msg["id"], "result": {"sessionId": "s1", "modes": {"currentModeId": "default", "availableModes": [{"id": "default", "name": "Default"}]}, "configOptions": CONFIG}})
+        elif m == "session/set_config_option":
+            for o in CONFIG:
+                if o["id"] == msg["params"]["configId"]:
+                    o["currentValue"] = msg["params"]["value"]
+            send({"jsonrpc": "2.0", "id": msg["id"], "result": {"configOptions": CONFIG}})
         elif m == "session/set_mode":
             send({"jsonrpc": "2.0", "id": msg["id"], "result": {}})
         elif m == "session/prompt":

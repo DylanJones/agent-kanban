@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Bot, BookOpen, Inbox, KanbanSquare, Play, Settings2, Square, Terminal } from "lucide-react";
+import { BarChart3, Bot, BookOpen, Inbox, KanbanSquare, Play, Settings2, Square, Terminal } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Link, NavLink, useNavigate, useParams } from "react-router";
 import { ApiError, ROLE_LABEL, type RunView, api, client, unwrap } from "../api/client";
 import { useLiveEvents } from "../api/live";
+import { ConnectClaudeModal } from "./ConnectClaude";
 import { Button, inputCls } from "./ui";
 
 export function useProjects() {
@@ -182,6 +183,9 @@ export function Layout({ children }: { children: ReactNode }) {
           <NavItem to="/agents" icon={<Bot size={15} />}>
             Agents
           </NavItem>
+          <NavItem to="/usage" icon={<BarChart3 size={15} />}>
+            Usage
+          </NavItem>
           {current && (
             <NavItem to={`/p/${current}/settings`} icon={<Settings2 size={15} />}>
               Project
@@ -198,6 +202,7 @@ export function Layout({ children }: { children: ReactNode }) {
       </header>
       <main className="min-h-0 flex-1 overflow-auto">{children}</main>
       <RunToasts />
+      <ConnectClaudeModal />
     </div>
   );
 }

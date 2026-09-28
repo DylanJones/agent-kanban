@@ -43,6 +43,8 @@ cargo build --release
 
 # Run it and open the printed login link
 ./target/release/agent-kanban serve
+# …or reachable from other devices on your network (plain HTTP; login still required)
+./target/release/agent-kanban serve --bind 0.0.0.0:7878
 ```
 
 The scheduler starts **off**. Turn it on with the switch in the header, or pass
@@ -109,8 +111,35 @@ Each run gets:
 - **A prompt.** Rendered per role from minijinja templates you can edit under **Project →
   Prompt templates**. It includes the issue thread, decisions already made, open review
   threads and a cheat sheet for the board API.
-- **Environment variables.** `$AKB_API` and `$AKB_AUTH` (a run-scoped token), plus
-  `AKB_PROJECT`, `AKB_ISSUE` and `AKB_RUN`.
+- **Board tools over MCP.** An `agent-kanban` MCP server (`/mcp`, authenticated with the
+  run's token) gives the agent `board_file_issue`, `board_comment`, `board_move_issue`,
+  `board_request_decision`, `board_open_pr`, `board_get_diff`, `board_add_thread`,
+  `board_submit_review` and more. The agent process makes these calls itself, outside its
+  shell sandbox. That matters for Codex, whose workspace sandbox blocks network access from
+  commands. Board tool calls are always permitted.
+- **The REST API as a fallback.** `$AKB_API` and `$AKB_AUTH` (a run-scoped token), plus
+  `AKB_PROJECT`, `AKB_ISSUE` and `AKB_RUN`, for curl.
+- **The project's setup script, run before every run.** It runs in the container when
+  containers are on. Keep it idempotent: it should be quick when nothing has changed, because
+  a worktree can move between host and container toolchains.
+- **Write access to the repo's shared `.git`** (as an extra session directory), so sandboxed
+  agents can commit from a linked worktree.
+
+### Model, effort and other session settings
+
+Each agent reports the settings it supports over ACP, such as `model`, effort (`effort` for
+Claude, `reasoning_effort` for Codex) and fast mode. The choices appear on the **Agents** page
+after an agent's first run, or after you press **Load model & effort options**.
+
+Settings apply at two levels:
+
+- **Agent default** (Agents page): used for every run.
+- **Per-role override** (Project → Agents): for example, triage on Sonnet at low effort and fix
+  on Opus at xhigh.
+
+They're set at the start of each session. A setting the agent doesn't accept is reported in the
+run transcript rather than failing the run. Each run page shows the model and effort it
+actually used.
 
 ### Permissions
 
@@ -187,7 +216,10 @@ Auth works like this:
 ## Containers
 
 In **Project → Container sandbox**, provide a base Dockerfile with your toolchain, enable
-containers and press **Build image**. agent-kanban adds an overlay on top that installs Node,
+containers and press **Build image** (or run `agent-kanban build-image --project <slug>`). The
+Dockerfile shouldn't copy the source, because worktrees are mounted at run time.
+[`examples/emojicode/`](examples/emojicode) has the emojicode toolchain image (Clang/LLVM
+from apt.llvm.org, ccache, tree-sitter) and its host/container-agnostic setup script. agent-kanban adds an overlay on top that installs Node,
 git, curl, ccache and the ACP adapters, and creates a non-root user with your uid.
 
 Each run then executes `docker run --rm -i …`:
@@ -229,7 +261,7 @@ Optional mirroring, per project:
 cargo test                       # unit + integration tests (scripted fake ACP agent, temp git repos)
 npm --prefix web run dev         # Vite on :5173, proxies /api to :7878
 cargo run -- serve --no-auth     # dev server without login
-npm --prefix web run gen:api     # regenerate TypeScript types from the running server's OpenAPI
+npm --prefix web run gen:api     # regenerate TypeScript types from the OpenAPI spec
 ```
 
 `tests/fixtures/fake_acp_agent.py` is a scripted ACP agent. The integration tests use it to

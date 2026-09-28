@@ -257,6 +257,13 @@ pub struct AgentDefinition {
     pub enabled: bool,
     /// Set when the adapter reported an authentication error.
     pub needs_auth: bool,
+    /// Default session settings (ACP config option id → value), e.g. `{"model": "opus", "effort": "high"}`.
+    #[schema(value_type = std::collections::HashMap<String, Object>)]
+    pub session_config: Json<std::collections::BTreeMap<String, JsonValue>>,
+    /// The settings this agent last offered (ACP `configOptions`): ids, names, categories and choices.
+    #[schema(value_type = Option<Vec<Object>>)]
+    pub config_options: Option<Json<JsonValue>>,
+    pub config_options_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -312,6 +319,9 @@ pub struct AgentRun {
     pub created_at: String,
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
+    /// The session settings the run actually used (option id → value), e.g. model and effort.
+    #[schema(value_type = Option<Object>)]
+    pub session_config: Option<Json<JsonValue>>,
 }
 
 impl AgentRun {

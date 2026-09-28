@@ -4,6 +4,7 @@ import { Hammer, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { type Project, ROLE_LABEL, type Role, api, client, unwrap } from "../api/client";
+import { SettingSelects, agentOptions, settingLabel, valueName } from "../components/SessionSettings";
 import { Button, ErrorBox, Field, Pill, TimeAgo, inputCls } from "../components/ui";
 
 function Section({ title, children, desc }: { title: string; desc?: string; children: React.ReactNode }) {
@@ -43,22 +44,41 @@ function Roles({ slug }: { slug: string }) {
   const roles = useQuery({ queryKey: ["project", "roles", slug], queryFn: () => unwrap(client.GET("/api/projects/{p}/roles", { params: { path: { p: slug } } })) });
   const agents = useQuery({ queryKey: ["agents"], queryFn: () => unwrap(client.GET("/api/agents")) });
   const put = useMutation({
-    mutationFn: (r: Record<string, string>) => api("PUT", `/api/projects/${slug}/roles`, { roles: r }),
+    mutationFn: (body: { roles: Record<string, string>; config?: Record<string, Record<string, unknown>> }) => api("PUT", `/api/projects/${slug}/roles`, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["project"] }),
   });
+  const current = roles.data?.roles ?? {};
   return (
-    <div className="grid grid-cols-4 gap-3">
-      {(["triage", "fix", "review", "merge_prep"] as Role[]).map((r) => (
-        <Field key={r} label={`${ROLE_LABEL[r]} agent`}>
-          <select className={inputCls} value={roles.data?.roles[r] ?? ""} onChange={(e) => put.mutate({ [r]: e.target.value })}>
-            {agents.data?.map((a) => (
-              <option key={a.slug} value={a.slug}>
-                {a.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-      ))}
+    <div className="space-y-2">
+      {(["triage", "fix", "review", "merge_prep"] as Role[]).map((r) => {
+        const agent = agents.data?.find((a) => a.slug === current[r]);
+        const overrides = (roles.data?.config?.[r] ?? {}) as Record<string, unknown>;
+        const defaults = (agent?.session_config ?? {}) as Record<string, unknown>;
+        const opts = agentOptions(agent, ["model", "thought_level"]);
+        return (
+          <div key={r} className="flex flex-wrap items-center gap-3">
+            <span className="w-24 text-sm font-medium">{ROLE_LABEL[r]}</span>
+            <select className={clsx(inputCls, "w-40 py-1")} value={current[r] ?? ""} onChange={(e) => put.mutate({ roles: { [r]: e.target.value } })}>
+              {agents.data?.map((a) => (
+                <option key={a.slug} value={a.slug}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+            {opts.length ? (
+              <SettingSelects
+                options={opts}
+                values={overrides}
+                onChange={(id, v) => put.mutate({ roles: current, config: { [r]: { [id]: v } } })}
+                inheritLabel={(o) => (defaults[o.id] != null ? `${settingLabel(o)}: agent default (${valueName(o, defaults[o.id])})` : `${settingLabel(o)}: agent default`)}
+              />
+            ) : (
+              <span className="text-xs text-zinc-500">Model/effort options appear once this agent has run or been tested (Agents page).</span>
+            )}
+          </div>
+        );
+      })}
+      <ErrorBox error={put.error} />
     </div>
   );
 }
@@ -164,7 +184,7 @@ export default function ProjectSettings() {
           <textarea className={clsx(inputCls, "font-mono text-xs h-24")} {...str("setup_script")} />
         </Field>
       </Section>
-      <Section title="Agents" desc="Which agent handles each step of the workflow in this project.">
+      <Section title="Agents" desc="Which agent handles each step of the workflow in this project, and its model and effort for that step.">
         <Roles slug={slug} />
         <Field label="Project instructions for agents" hint="Injected into every prompt (build/test commands, conventions). Replaces board-related parts of AGENTS.md.">
           <textarea className={clsx(inputCls, "font-mono text-xs h-40")} {...str("agent_instructions")} />

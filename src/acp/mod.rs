@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, Implementation, InitializeRequest, NewSessionRequest, PermissionOption, PromptRequest,
+    CancelNotification, ContentBlock, HttpHeader, Implementation, InitializeRequest, McpServer, McpServerHttp, NewSessionRequest, PermissionOption, PromptRequest,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification,
-    SetSessionModeRequest, TextContent,
+    SetSessionConfigOptionRequest, SetSessionModeRequest, TextContent,
 };
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Responder};
 use serde::Serialize;
@@ -64,6 +64,19 @@ pub enum Out {
     },
     TurnEnded(Result<Value, AcpError>),
     Stderr(String),
+    /// The session's configuration options (model, effort, ...) after applying the requested
+    /// values, plus which requested values were applied or skipped (with a reason).
+    Config { options: Value, applied: Vec<(String, Value)>, skipped: Vec<(String, String)> },
+}
+
+/// Extra session configuration: the board's MCP server and additional writable directories.
+#[derive(Debug, Clone, Default)]
+pub struct SessionExtras {
+    /// (url, bearer token) of the board MCP endpoint.
+    pub mcp: Option<(String, String)>,
+    pub additional_directories: Vec<PathBuf>,
+    /// Session config values to set (option id → value), e.g. `model`, `effort`/`reasoning_effort`.
+    pub config: Vec<(String, Value)>,
 }
 
 pub struct Launch {
@@ -71,6 +84,45 @@ pub struct Launch {
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub cwd: PathBuf,
+}
+
+/// All selectable values of a config option (flattening grouped selects).
+pub fn option_values(opt: &Value) -> Vec<String> {
+    let mut out = vec![];
+    for o in opt.get("options").and_then(Value::as_array).into_iter().flatten() {
+        if let Some(v) = o.get("value").and_then(Value::as_str) {
+            out.push(v.to_string());
+        }
+        for inner in o.get("options").and_then(Value::as_array).into_iter().flatten() {
+            if let Some(v) = inner.get("value").and_then(Value::as_str) {
+                out.push(v.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Validate a requested config value against the session's options. `Ok(None)`: already set.
+fn check_config_value(options: &Value, id: &str, value: &Value) -> Result<Option<Value>, String> {
+    let Some(opt) = options.as_array().and_then(|a| a.iter().find(|o| o.get("id").and_then(Value::as_str) == Some(id))) else {
+        return Err(format!("this agent has no `{id}` setting"));
+    };
+    if opt.get("currentValue") == Some(value) {
+        return Ok(None);
+    }
+    match (opt.get("type").and_then(Value::as_str), value) {
+        (Some("boolean"), Value::Bool(_)) => Ok(Some(value.clone())),
+        (Some("boolean"), _) => Err(format!("`{id}` is on/off")),
+        (_, Value::String(v)) => {
+            let values = option_values(opt);
+            if values.iter().any(|x| x == v) {
+                Ok(Some(value.clone()))
+            } else {
+                Err(format!("`{v}` isn't available for `{id}` (available: {})", values.join(", ")))
+            }
+        }
+        _ => Err(format!("unsupported value for `{id}`")),
+    }
 }
 
 /// Spawn the adapter in its own process group so the whole tree can be killed.
@@ -112,6 +164,7 @@ pub async fn drive(
     stderr: Option<ChildStderr>,
     cwd: PathBuf,
     mode: Option<String>,
+    session: SessionExtras,
     out: mpsc::UnboundedSender<Out>,
     mut ctl: mpsc::UnboundedReceiver<Ctl>,
     cancel: CancellationToken,
@@ -163,17 +216,56 @@ pub async fn drive(
                 )
                 .block_task()
                 .await?;
-            let sess = cx.send_request(NewSessionRequest::new(cwd.clone())).block_task().await?;
+            let mut new_session = NewSessionRequest::new(cwd.clone()).additional_directories(session.additional_directories.clone());
+            if let Some((url, token)) = &session.mcp
+                && init.agent_capabilities.mcp_capabilities.http
+            {
+                new_session = new_session.mcp_servers(vec![McpServer::Http(
+                    McpServerHttp::new("agent-kanban", url.clone()).headers(vec![HttpHeader::new("Authorization", format!("Bearer {token}"))]),
+                )]);
+            }
+            let sess = cx.send_request(new_session).block_task().await?;
             let sid = sess.session_id.clone();
             let _ = out.send(Out::Initialized {
                 agent_info: serde_json::to_value(&init.agent_info).unwrap_or(Value::Null),
                 session_id: sid.0.to_string(),
                 modes: serde_json::to_value(&sess.modes).unwrap_or(Value::Null),
             });
+            let mut options = serde_json::to_value(&sess.config_options).unwrap_or(Value::Null);
             if let (Some(m), Some(modes)) = (&mode, &sess.modes)
                 && modes.available_modes.iter().any(|am| am.id.0.as_ref() == m.as_str())
             {
                 cx.send_request(SetSessionModeRequest::new(sid.clone(), m.clone())).block_task().await?;
+                // Keep the reported settings in step with the mode we just selected.
+                if let Some(o) = options.as_array_mut().and_then(|a| a.iter_mut().find(|o| o.get("id").and_then(Value::as_str) == Some("mode"))) {
+                    o["currentValue"] = Value::String(m.clone());
+                }
+            }
+            let (mut applied, mut skipped) = (vec![], vec![]);
+            // Model first: changing it can change which effort levels exist.
+            let mut wanted = session.config.clone();
+            wanted.sort_by_key(|(id, _)| if id == "model" { 0 } else { 1 });
+            for (id, value) in wanted {
+                match check_config_value(&options, &id, &value) {
+                    Err(why) => skipped.push((id, why)),
+                    Ok(None) => {} // already set
+                    Ok(Some(v)) => {
+                        let req = match &v {
+                            Value::Bool(b) => SetSessionConfigOptionRequest::new(sid.clone(), id.clone(), *b),
+                            other => SetSessionConfigOptionRequest::new(sid.clone(), id.clone(), other.as_str().unwrap_or_default()),
+                        };
+                        match cx.send_request(req).block_task().await {
+                            Ok(r) => {
+                                options = serde_json::to_value(&r.config_options).unwrap_or(options);
+                                applied.push((id, v));
+                            }
+                            Err(e) => skipped.push((id, e.message)),
+                        }
+                    }
+                }
+            }
+            if !options.is_null() || !skipped.is_empty() {
+                let _ = out.send(Out::Config { options, applied, skipped });
             }
             loop {
                 let cmd = tokio::select! {

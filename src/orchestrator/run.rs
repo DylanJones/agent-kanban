@@ -28,18 +28,31 @@ enum Outcome {
     Cancelled(String),
 }
 
-/// Records transcript events, coalescing streamed text chunks.
+struct TextBlock {
+    kind: String,
+    key: String,
+    text: String,
+    written: Instant,
+    dirty: bool,
+}
+
+/// Records transcript events. Streamed text chunks accumulate into a single row per block
+/// (updated in place as more arrives), so a message is never split mid-sentence.
 struct Transcript {
     app: AppState,
     run_id: i64,
     seq: i64,
     events: tokio::sync::broadcast::Sender<RunEvent>,
-    pending: Option<(String, String, Instant)>,
+    /// The text block currently streaming in; it's written to one row and updated in place.
+    pending: Option<TextBlock>,
+    blocks: u64,
     stderr_file: Option<tokio::fs::File>,
     stderr_tail: VecDeque<String>,
     pending_stderr: Vec<String>,
     last_message: String,
     rate_limit_meta: Option<Value>,
+    /// Usage, model and cost as reported over ACP (fallback when no session log is readable).
+    acp_usage: crate::usage::AcpReport,
 }
 
 impl Transcript {
@@ -104,12 +117,21 @@ impl Transcript {
         }
     }
 
-    async fn flush(&mut self) {
-        if let Some((kind, text, _)) = self.pending.take()
-            && !text.trim().is_empty()
-        {
-            self.insert(&kind, None, json!({ "text": text })).await;
+    async fn write_pending(&mut self) {
+        let Some(b) = self.pending.as_mut() else { return };
+        if !b.dirty || b.text.trim().is_empty() {
+            return;
         }
+        b.dirty = false;
+        b.written = Instant::now();
+        let (kind, key, text) = (b.kind.clone(), b.key.clone(), b.text.clone());
+        self.upsert(&kind, &key, json!({ "text": text })).await;
+    }
+
+    /// Close the current text block and write any buffered stderr.
+    async fn flush(&mut self) {
+        self.write_pending().await;
+        self.pending = None;
         if !self.pending_stderr.is_empty() {
             let text = self.pending_stderr.join("\n");
             self.pending_stderr.clear();
@@ -117,18 +139,34 @@ impl Transcript {
         }
     }
 
+    /// Periodic write so live viewers see text as it streams, without starting a new block.
     async fn maybe_flush(&mut self) {
-        if self.pending.as_ref().is_some_and(|(_, _, t)| t.elapsed() > Duration::from_millis(700)) || self.pending_stderr.len() > 50 {
-            self.flush().await;
+        if self.pending.as_ref().is_some_and(|b| b.dirty && b.written.elapsed() > Duration::from_millis(400)) {
+            self.write_pending().await;
+        }
+        if self.pending_stderr.len() > 50 {
+            let text = self.pending_stderr.join("\n");
+            self.pending_stderr.clear();
+            self.insert("stderr", None, json!({ "text": text })).await;
         }
     }
 
     async fn text_chunk(&mut self, kind: &str, text: &str) {
         match &mut self.pending {
-            Some((k, buf, _)) if k == kind => buf.push_str(text),
+            Some(b) if b.kind == kind => {
+                b.text.push_str(text);
+                b.dirty = true;
+            }
             _ => {
                 self.flush().await;
-                self.pending = Some((kind.to_string(), text.to_string(), Instant::now()));
+                self.blocks += 1;
+                self.pending = Some(TextBlock {
+                    kind: kind.to_string(),
+                    key: format!("text:{}", self.blocks),
+                    text: text.to_string(),
+                    written: Instant::now(),
+                    dirty: true,
+                });
             }
         }
         if kind == "message" {
@@ -187,6 +225,12 @@ impl Transcript {
                 self.upsert("plan", "plan", json!({ "entries": u.get("entries").cloned().unwrap_or(json!([])) })).await;
             }
             "usage_update" => {
+                if let Some(m) = u.pointer("/_meta/_claude~1model").and_then(Value::as_str) {
+                    self.acp_usage.model = Some(m.to_string());
+                }
+                if let Some(c) = u.pointer("/cost/amount").and_then(Value::as_f64) {
+                    self.acp_usage.cost_usd = Some(c);
+                }
                 let mut p = u.clone();
                 if let Some(o) = p.as_object_mut() {
                     o.remove("sessionUpdate");
@@ -253,7 +297,6 @@ struct Prepared {
     kind: &'static str,
     branch: Option<String>,
     pr: Option<PullRequest>,
-    created: bool,
 }
 
 async fn prepare_worktree(app: &AppState, project: &Project, issue: &Issue, role: Role, run_id: i64) -> Result<Prepared, Outcome> {
@@ -270,12 +313,12 @@ async fn prepare_worktree(app: &AppState, project: &Project, issue: &Issue, role
                 return Err(Outcome::Blocked("merge prep needs an open PR, but none is linked".into()));
             }
             let path = root.join(format!("issue-{}", issue.number));
-            let created = git::worktree::ensure_branch(repo, &path, &branch, &project.base_branch)
+            git::worktree::ensure_branch(repo, &path, &branch, &project.base_branch)
                 .await
                 .map_err(|e| Outcome::Blocked(format!("{e:#}")))?;
             record_worktree(app, project, issue.id, &path, Some(&branch), "branch").await;
             let _ = sqlx::query("UPDATE issues SET branch_name = ? WHERE id = ?").bind(&branch).bind(issue.id).execute(&app.db).await;
-            Ok(Prepared { worktree: path, kind: "branch", branch: Some(branch), pr, created })
+            Ok(Prepared { worktree: path, kind: "branch", branch: Some(branch), pr })
         }
         Role::Review => {
             let Some(pr) = pr else {
@@ -289,27 +332,36 @@ async fn prepare_worktree(app: &AppState, project: &Project, issue: &Issue, role
             let path = root.join(format!("review-{}-run{run_id}", issue.number));
             git::worktree::add_detached(repo, &path, &head).await.map_err(|e| Outcome::Failed(format!("{e:#}")))?;
             record_worktree(app, project, issue.id, &path, None, "detached").await;
-            Ok(Prepared { worktree: path, kind: "detached", branch: None, pr: Some(pr), created: true })
+            Ok(Prepared { worktree: path, kind: "detached", branch: None, pr: Some(pr) })
         }
         Role::Triage => {
             let path = root.join(format!("triage-{}-run{run_id}", issue.number));
             git::worktree::add_detached(repo, &path, &project.base_branch).await.map_err(|e| Outcome::Failed(format!("{e:#}")))?;
             record_worktree(app, project, issue.id, &path, None, "detached").await;
-            Ok(Prepared { worktree: path, kind: "detached", branch: None, pr, created: true })
+            Ok(Prepared { worktree: path, kind: "detached", branch: None, pr })
         }
     }
 }
 
-async fn run_setup(project: &Project, worktree: &Path, tr: &mut Transcript) -> Result<(), String> {
+async fn run_setup(app: &AppState, project: &Project, worktree: &Path, tr: &mut Transcript) -> Result<(), String> {
     let Some(script) = project.setup_script.as_deref().filter(|s| !s.trim().is_empty()) else { return Ok(()) };
-    tr.insert("status", None, json!({"text": "running project setup script"})).await;
-    let out = tokio::process::Command::new("bash")
-        .arg("-lc")
-        .arg(script)
-        .current_dir(worktree)
-        .env("AKB_REPO", &project.repo_path)
-        .output()
+    // In container mode the setup runs in the project image, so e.g. a configured build dir
+    // points at the container's toolchain rather than the host's.
+    let mut cmd = if project.container_enabled {
+        tr.insert("status", None, json!({"text": "running project setup script in the container"})).await;
+        let args = crate::container::setup_args(app, project, worktree, script).await.map_err(|e| format!("{e:#}"))?;
+        let mut c = tokio::process::Command::new("docker");
+        c.args(args);
+        c
+    } else {
+        tr.insert("status", None, json!({"text": "running project setup script"})).await;
+        let mut c = tokio::process::Command::new("bash");
+        c.arg("-lc").arg(script).current_dir(worktree).env("AKB_REPO", &project.repo_path);
+        c
+    };
+    let out = tokio::time::timeout(Duration::from_secs(15 * 60), cmd.kill_on_drop(true).output())
         .await
+        .map_err(|_| "setup script timed out after 15 minutes".to_string())?
         .map_err(|e| e.to_string())?;
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     let tail: String = text.lines().rev().take(80).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
@@ -389,7 +441,42 @@ async fn build_prompt(
         }
         None => (Value::Null, vec![], None, vec![]),
     };
+    // Triage sees the board's open (and recently closed) issues to deduplicate against.
+    let open_issues: Vec<Value> = if role == Role::Triage {
+        let cutoff = db::fmt_time(chrono::Utc::now() - chrono::Duration::days(60));
+        sqlx::query_as::<_, (i64, String, String, Option<i64>)>(
+            "SELECT i.number, i.state, i.title, (SELECT p.number FROM issues p WHERE p.id = i.parent_issue_id)
+               FROM issues i WHERE i.project_id = ? AND i.id != ?
+                AND (i.state NOT IN ('done','closed') OR COALESCE(i.closed_at, i.updated_at) >= ?)
+              ORDER BY i.number DESC LIMIT 120",
+        )
+        .bind(project.id)
+        .bind(issue.id)
+        .bind(&cutoff)
+        .fetch_all(&app.db)
+        .await?
+        .into_iter()
+        .map(|(n, st, t, parent)| json!({"number": n, "state": st, "title": t, "parent": parent}))
+        .collect()
+    } else {
+        vec![]
+    };
+    // Everyone else sees the issue's umbrella, children and siblings.
+    let related: Vec<Value> = sqlx::query_as::<_, (i64, String, String, String)>(
+        "SELECT number, state, title, 'umbrella issue' FROM issues WHERE id = ?1
+         UNION ALL SELECT number, state, title, 'part of this issue' FROM issues WHERE parent_issue_id = ?2
+         UNION ALL SELECT number, state, title, 'shares the same umbrella' FROM issues WHERE ?1 IS NOT NULL AND parent_issue_id = ?1 AND id != ?2",
+    )
+    .bind(issue.parent_issue_id)
+    .bind(issue.id)
+    .fetch_all(&app.db)
+    .await?
+    .into_iter()
+    .map(|(n, st, t, rel)| json!({"number": n, "state": st, "title": t, "relation": rel}))
+    .collect();
     let ctx = json!({
+        "open_issues": open_issues,
+        "related": related,
         "api": api,
         "token": token,
         "worktree": prep.worktree.to_string_lossy(),
@@ -415,26 +502,128 @@ async fn build_prompt(
     prompt::render(&template, &ctx)
 }
 
-/// Did the run record the outcome its role requires?
-async fn outcome_recorded(app: &AppState, run: &AgentRun, issue_id: i64) -> bool {
-    let Ok(issue) = services::issue_by_id(&app.db, issue_id).await else { return true };
-    if issue.hold.is_some() || issue.state.is_terminal() || issue.state == IssueState::Backlog {
-        return true;
+enum Recorded {
+    /// The run itself recorded its outcome.
+    ByRun,
+    /// Someone else (human, scanner, another run) moved the issue on first.
+    Superseded(String),
+    Missing,
+}
+
+/// Did the run record the outcome its role requires — itself, rather than the issue merely moving on?
+async fn outcome_recorded(app: &AppState, run: &AgentRun, issue_id: i64) -> Recorded {
+    let Ok(issue) = services::issue_by_id(&app.db, issue_id).await else { return Recorded::Superseded("issue deleted".into()) };
+    let acted: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM events WHERE run_id = ?1 AND issue_id = ?2 AND type IN ('issue.transition','issue.decision_requested'))
+             OR EXISTS(SELECT 1 FROM reviews WHERE run_id = ?1 AND verdict IN ('approve','changes_requested','needs_decision'))",
+    )
+    .bind(run.id)
+    .bind(issue_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap_or(false);
+    // Merge prep usually just commits the merge; the conflict scanner then moves the issue itself.
+    let committed = match sqlx::query_as::<_, (Option<String>, Option<String>)>("SELECT start_head_sha, worktree_path FROM agent_runs WHERE id = ?")
+        .bind(run.id)
+        .fetch_one(&app.db)
+        .await
+    {
+        Ok((Some(start), Some(wt))) => git::rev_parse(&wt, "HEAD").await.is_some_and(|h| h != start),
+        _ => false,
+    };
+    let moved_on = issue.hold.is_some()
+        || issue.state.is_terminal()
+        || issue.state == IssueState::Backlog
+        || match run.role {
+            Role::Triage => issue.state != IssueState::Triage,
+            Role::Fix => matches!(issue.state, IssueState::InReview | IssueState::ReadyToMerge),
+            Role::MergePrep => issue.state != IssueState::MergeConflict,
+            Role::Review => issue.state != IssueState::InReview,
+        };
+    if acted || (run.role == Role::MergePrep && committed && moved_on) {
+        Recorded::ByRun
+    } else if moved_on {
+        Recorded::Superseded(format!("issue moved to {} before this run recorded an outcome", issue.state.as_str()))
+    } else {
+        Recorded::Missing
     }
-    match run.role {
-        Role::Triage => issue.state != IssueState::Triage,
-        Role::Fix => matches!(issue.state, IssueState::InReview | IssueState::ReadyToMerge),
-        Role::MergePrep => issue.state != IssueState::MergeConflict,
-        Role::Review => {
-            let verdict: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM reviews WHERE run_id = ? AND verdict IN ('approve','changes_requested','needs_decision'))",
-            )
-            .bind(run.id)
-            .fetch_one(&app.db)
-            .await
-            .unwrap_or(false);
-            verdict || issue.state != IssueState::InReview
+}
+
+/// The agent's default session settings with this project's per-role overrides applied.
+pub async fn desired_session_config(
+    app: &AppState,
+    project: &Project,
+    role: Role,
+    agent: &AgentDefinition,
+) -> std::collections::BTreeMap<String, Value> {
+    let mut cfg = agent.session_config.0.clone();
+    let over: Option<String> = sqlx::query_scalar("SELECT config FROM role_session_config WHERE project_id = ? AND role = ? AND agent_definition_id = ?")
+        .bind(project.id)
+        .bind(role.as_str())
+        .bind(agent.id)
+        .fetch_optional(&app.db)
+        .await
+        .ok()
+        .flatten();
+    if let Some(o) = over.and_then(|o| serde_json::from_str::<serde_json::Map<String, Value>>(&o).ok()) {
+        for (k, v) in o {
+            if v.is_null() {
+                cfg.remove(&k);
+            } else {
+                cfg.insert(k, v);
+            }
         }
+    }
+    cfg
+}
+
+/// Option id → current value.
+pub fn effective_config(options: &Value) -> serde_json::Map<String, Value> {
+    options
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|o| Some((o.get("id")?.as_str()?.to_string(), o.get("currentValue")?.clone())))
+        .collect()
+}
+
+/// "model: Opus · effort: High" from the model/thought-level options, using display names.
+pub fn config_summary(options: &Value) -> String {
+    let mut parts = vec![];
+    for o in options.as_array().into_iter().flatten() {
+        let cat = o.get("category").and_then(Value::as_str).unwrap_or("");
+        if !matches!(cat, "model" | "thought_level") {
+            continue;
+        }
+        let cur = o.get("currentValue").cloned().unwrap_or(Value::Null);
+        let name = crate::acp::option_values(o)
+            .iter()
+            .position(|v| Some(v.as_str()) == cur.as_str())
+            .and_then(|_| {
+                let all: Vec<&Value> = o["options"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|x| x.get("options").and_then(Value::as_array).map(|a| a.iter().collect::<Vec<_>>()).unwrap_or_else(|| vec![x]))
+                    .collect();
+                all.into_iter().find(|x| x.get("value") == Some(&cur)).and_then(|x| x.get("name")).and_then(Value::as_str).map(str::to_string)
+            })
+            .or_else(|| cur.as_str().map(str::to_string))
+            .unwrap_or_default();
+        let label = if cat == "model" { "model" } else { "effort" };
+        parts.push(format!("{label}: {name}"));
+    }
+    parts.join(" · ")
+}
+
+pub async fn remember_config_options(app: &AppState, agent_id: i64, options: &Value) {
+    if options.as_array().is_some_and(|a| !a.is_empty()) {
+        let _ = sqlx::query("UPDATE agent_definitions SET config_options = ?, config_options_at = ? WHERE id = ?")
+            .bind(options.to_string())
+            .bind(db::now())
+            .bind(agent_id)
+            .execute(&app.db)
+            .await;
     }
 }
 
@@ -546,11 +735,13 @@ async fn execute_inner(
         seq: sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM run_events WHERE run_id = ?").bind(run_id).fetch_one(&app.db).await?,
         events,
         pending: None,
+        blocks: 0,
         stderr_file: tokio::fs::File::create(&stderr_path).await.ok(),
         stderr_tail: VecDeque::new(),
         pending_stderr: vec![],
         last_message: String::new(),
         rate_limit_meta: None,
+        acp_usage: Default::default(),
     };
     set_status(app, run_id, "preparing").await;
     app.bus.run(Some(&project.slug), run_id);
@@ -575,9 +766,10 @@ async fn execute_inner(
             .bind(run_id)
             .execute(&app.db)
             .await;
-        if prep.created
-            && prep.kind == "branch"
-            && let Err(e) = run_setup(&project, &prep.worktree, &mut tr).await
+        // Every run gets the project's setup (e.g. a configured build dir): reviewers build and
+        // run tests too, triage may reproduce, and a reused worktree may switch between host and
+        // container toolchains. Setup scripts should be idempotent and fast when nothing changed.
+        if let Err(e) = run_setup(app, &project, &prep.worktree, &mut tr).await
         {
             prep_holder = Some(prep);
             break 'run Outcome::Failed(e);
@@ -642,6 +834,19 @@ async fn execute_inner(
             }
         };
         container = plan.container.clone();
+        // Board tools over MCP (work even inside an agent's shell sandbox), and the repo's shared
+        // .git as an extra writable dir so sandboxed agents can commit from a linked worktree.
+        let base_url = if container.is_some() { app.config.container_url.clone() } else { app.config.public_url.clone() };
+        let mut extras = acp::SessionExtras {
+            mcp: Some((format!("{base_url}/mcp"), token.clone())),
+            additional_directories: vec![],
+            config: desired_session_config(app, &project, run.role, &agent).await.into_iter().collect(),
+        };
+        if prep.kind == "branch"
+            && let Ok(common) = git::common_dir(&project.repo_path).await
+        {
+            extras.additional_directories.push(PathBuf::from(common));
+        }
         let mut child = match acp::spawn(&plan.launch) {
             Ok(c) => c,
             Err(e) => {
@@ -657,7 +862,7 @@ async fn execute_inner(
         let stderr = child.stderr.take();
         child_holder = Some(child);
         let drive =
-            tokio::spawn(acp::drive(stdin, stdout, stderr, prep.worktree.clone(), plan.mode.clone(), out_tx, ctl_rx, cancel.clone()));
+            tokio::spawn(acp::drive(stdin, stdout, stderr, prep.worktree.clone(), plan.mode.clone(), extras, out_tx, ctl_rx, cancel.clone()));
         tr.insert("prompt", None, json!({"text": prompt_text})).await;
         let _ = ctl_tx.send(Ctl::Prompt(prompt_text));
 
@@ -706,6 +911,23 @@ async fn execute_inner(
                             }
                         }
                         Out::Stderr(l) => tr.stderr(l).await,
+                        Out::Config { options, applied: _, skipped } => {
+                            let effective = effective_config(&options);
+                            let _ = sqlx::query("UPDATE agent_runs SET session_config = ? WHERE id = ?")
+                                .bind(Value::Object(effective.clone()).to_string())
+                                .bind(run_id)
+                                .execute(&app.db)
+                                .await;
+                            remember_config_options(app, agent.id, &options).await;
+                            let summary = config_summary(&options);
+                            if !summary.is_empty() {
+                                tr.insert("status", None, json!({"text": format!("settings: {summary}"), "config": effective})).await;
+                            }
+                            for (id, why) in skipped {
+                                tr.insert("status", None, json!({"text": format!("⚠️ couldn't set `{id}`: {why}")})).await;
+                            }
+                            app.bus.run(Some(&project.slug), run_id);
+                        }
                         Out::Permission { tool_call, options, reply } => {
                             tr.flush().await;
                             handle_permission(app, &mut tr, &agent, run_id, container.is_some(), &prep.worktree.to_string_lossy(), tool_call, options, reply).await;
@@ -716,7 +938,9 @@ async fn execute_inner(
                             if let Ok(r) = &res
                                 && let Some(u) = r.get("usage").filter(|u| !u.is_null()) {
                                     let _ = sqlx::query("UPDATE agent_runs SET usage = ? WHERE id = ?").bind(u.to_string()).bind(run_id).execute(&app.db).await;
+                                    tr.acp_usage.usage = Some(u.clone());
                                 }
+                            crate::usage::refresh_run(app, run_id, Some(&tr.acp_usage)).await;
                             let stop = res.as_ref().ok().and_then(|r| r.get("stopReason")).and_then(Value::as_str).unwrap_or("error").to_string();
                             let _ = sqlx::query("UPDATE agent_runs SET stop_reason = ? WHERE id = ?").bind(&stop).bind(run_id).execute(&app.db).await;
                             tr.insert("status", None, json!({"text": format!("turn ended: {stop}"), "error": turn_error})).await;
@@ -737,8 +961,10 @@ async fn execute_inner(
                                 in_turn = true;
                                 continue;
                             }
-                            if outcome_recorded(app, &run, issue_id).await {
-                                break Outcome::Succeeded(format!("turn ended ({stop})"));
+                            match outcome_recorded(app, &run, issue_id).await {
+                                Recorded::ByRun => break Outcome::Succeeded(format!("turn ended ({stop})")),
+                                Recorded::Superseded(why) => break Outcome::Cancelled(format!("superseded: {why}")),
+                                Recorded::Missing => {}
                             }
                             if nudges < 1 && matches!(stop.as_str(), "end_turn" | "max_turn_requests" | "max_tokens") {
                                 nudges += 1;
@@ -790,6 +1016,8 @@ async fn execute_inner(
     if let Some(mut c) = child_holder.take() {
         acp::kill_tree(&mut c).await;
     }
+    // Final usage (session logs are complete once the agent process has exited).
+    crate::usage::refresh_run(app, run_id, Some(&tr.acp_usage)).await;
     if let Some(name) = &container {
         crate::container::kill(name).await;
     }
@@ -904,7 +1132,14 @@ async fn handle_permission(
     };
     let opts_json = serde_json::to_value(&options).unwrap_or(json!([]));
     let title = tool_call.get("title").and_then(Value::as_str).unwrap_or("tool call").to_string();
-    let policy = if in_container { agent.container_permission_policy.as_str() } else { agent.permission_policy.as_str() };
+    let is_board_tool = regex::Regex::new(r"agent-kanban|\bboard_[a-z_]+").unwrap().is_match(&title);
+    let policy = if is_board_tool {
+        "auto_allow"
+    } else if in_container {
+        agent.container_permission_policy.as_str()
+    } else {
+        agent.permission_policy.as_str()
+    };
     let mut policy = policy.to_string();
     let mut note = "policy".to_string();
     if policy == "allowlist" {

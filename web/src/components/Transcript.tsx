@@ -404,6 +404,14 @@ function blocks(events: RunEvent[]): Block[] {
       const next = events.find((x) => x.seq > e.seq && !["thought", "stderr", "usage"].includes(x.kind));
       if (next?.kind === "tool_call") continue;
     }
+    // Adjacent pieces of the same message/thought are one block (older transcripts stored
+    // streamed text in several rows, sometimes mid-sentence).
+    const prev = out[out.length - 1];
+    if ((e.kind === "message" || e.kind === "thought") && prev?.type === "event" && prev.ev.kind === e.kind) {
+      const text = String((prev.ev.payload as Payload).text ?? "") + String(p.text ?? "");
+      prev.ev = { ...prev.ev, payload: { ...(prev.ev.payload as Payload), text } as unknown as RunEvent["payload"] };
+      continue;
+    }
     out.push({ type: "event", ev: e, key: e.seq });
   }
   return out;

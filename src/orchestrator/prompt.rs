@@ -7,11 +7,16 @@ use crate::domain::Role;
 
 const GUIDE: &str = include_str!("../../docs/AGENT_API.md");
 
-const CHEATSHEET: &str = r#"## Board API (agent-kanban)
+const CHEATSHEET: &str = r#"## Board (agent-kanban)
+**Use the `agent-kanban` MCP tools** (`board_file_issue`, `board_comment`, `board_move_issue`, `board_request_decision`,
+`board_open_pr`, `board_get_pr`, `board_get_diff`, `board_add_thread`, `board_reply_thread`, `board_resolve_thread`,
+`board_submit_review`, `board_current_run`, ...). They work even when your shell is sandboxed.
+If you don't have them, use the REST API below with curl.
+
 Base URL `{{ api }}` · token `{{ token }}` — also exported as `$AKB_API` and `$AKB_AUTH`.
 Send `-H "Authorization: Bearer $AKB_AUTH"` on every call. Full guide: `curl -s "$AKB_API/agent-guide" -H "Authorization: Bearer $AKB_AUTH"`.
 
-- **Found an unrelated bug? File it immediately, then continue your task** (don't fix it here):
+- **Found an unrelated bug? File it immediately (`board_file_issue`), then continue your task** (don't fix it here):
   `curl -sS -X POST "$AKB_API/projects/{{ project.slug }}/issues" -H "Authorization: Bearer $AKB_AUTH" -H 'Content-Type: text/plain' --data-binary $'<title>\n<what, where (file:line), how to reproduce>'`
 - Comment on your issue: `POST $AKB_API/projects/{{ project.slug }}/issues/{{ issue.number }}/comments` `{"body": "..."}`
 - Move your issue: `POST $AKB_API/projects/{{ project.slug }}/issues/{{ issue.number }}/transition` `{"to": "...", "comment": "..."}`
@@ -46,18 +51,33 @@ const TRIAGE: &str = r#"You are the **triage** agent for issue #{{ issue.number 
 
 {% include "context" %}
 ## Your task
-Decide whether this report is valid and actionable, and record a triage outcome.
+Decide whether this report is valid, new, and actionable, and record a triage outcome.
 
-1. Read the report and investigate the code in your worktree (`{{ worktree }}`, detached at `{{ project.base_branch }}`). Reproduce it if that's cheap. Do **not** change code or commit.
-2. Search for duplicates: `GET $AKB_API/projects/{{ project.slug }}/issues?q=<keywords>`.
-3. Post one triage comment with your findings: whether you reproduced it, the likely root cause (file:line), a suggested approach, and any risks.
-4. Set fields if you can: `PATCH $AKB_API/projects/{{ project.slug }}/issues/{{ issue.number }}` with `{"priority": "P0|P1|P2", "size": "XS|S|M|L|XL", "add_labels": ["bug"]}`.
+1. **Check for duplicates and related issues first.** Compare against the issues below, and search with several
+   different keywords (`board_search_issues`), including the code area and the underlying cause, not just the
+   symptom's wording. Read any candidate with `board_get_issue`.
+   - **Same bug** (same root cause *and* the same fix would resolve both): close this issue as a duplicate:
+     `board_move_issue` with `to: "closed"`, `duplicate_of: <n>`, and a comment saying why. The report is copied to
+     the original's thread. Stop there.
+   - **Related** (same root cause or code area, but a different symptom or code path): keep it, and group them.
+     If an umbrella issue exists, set it as the `parent` (`board_update_issue`). If two or more related issues
+     exist and there's no umbrella, file one (`board_file_issue`, titled after the shared root cause) and set it as
+     the `parent` of this issue and the related open ones. Mention the related issues in your triage comment so the
+     fix agent can fix them together or avoid conflicting changes.
+2. Investigate the code in your worktree (`{{ worktree }}`, detached at `{{ project.base_branch }}`). Reproduce it if
+   that's cheap (the build directory is configured). Do **not** change code or commit.
+3. Post one triage comment: whether you reproduced it, the likely root cause (file:line), a suggested approach,
+   related issues, and risks.
+4. Set fields: `board_update_issue` with `priority` (P0/P1/P2), `size` (XS..XL), `add_labels` (e.g. `bug`).
 5. Move the issue — exactly one of:
    - `ready`: valid and actionable; a fix agent will pick it up.
    - `backlog`: valid but not worth doing now, or too vague to act on (say what's missing).
-   - `closed` with `close_reason` `duplicate` (name the original), `invalid`, or `wontfix`.
+   - `closed` with `close_reason` `invalid` or `wontfix` (or `duplicate_of` as above).
    If the right behaviour is a genuine language/design question, use a decision request instead.
-
+{% if open_issues %}
+### Open and recently closed issues
+{% for i in open_issues %}- #{{ i.number }} [{{ i.state }}]{% if i.parent %} (part of #{{ i.parent }}){% endif %} {{ i.title }}
+{% endfor %}{% endif %}
 End your turn once the issue has left `triage`.
 {% if project.instructions %}
 ## Project instructions
@@ -82,6 +102,10 @@ Branch `{{ pr.branch }}` · head `{{ pr.head_sha[:10] }}`{% if pr.has_conflicts 
 {% for c in pr_comments %}**{{ c.author }}**{% if c.kind != "comment" %} [{{ c.kind }}]{% endif %}: {{ c.body }}
 
 {% endfor %}{% endif %}{% endif %}
+{% if related %}## Related issues
+{% for i in related %}- #{{ i.number }} [{{ i.state }}] {{ i.title }}{% if i.relation %} — {{ i.relation }}{% endif %}
+{% endfor %}Coordinate with these: if one fix naturally covers another, say so in your PR and comment on that issue; don't make changes that conflict with an open PR for a sibling.
+{% endif %}
 ## Your task
 Your worktree is `{{ worktree }}` on branch `{{ branch }}` (based on `{{ project.base_branch }}`). Work only there.
 

@@ -5,6 +5,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import { ROLE_LABEL, type RunEvent, type RunView, api, client, unwrap } from "../api/client";
 import { Transcript } from "../components/Transcript";
+import { fmtTokens } from "./Usage";
+import { summarizeSettings } from "../components/SessionSettings";
 import { Button, Empty, ErrorBox, Pill, TimeAgo, fmtDur, fieldCls, inputCls } from "../components/ui";
 
 export const RUN_STATUS_STYLE: Record<string, string> = {
@@ -59,6 +61,7 @@ export function RunsPage() {
               {r.issue_title}
             </span>
             <span className="max-w-72 truncate text-xs text-zinc-500">{r.error ?? r.outcome}</span>
+            <span className="w-14 text-right text-xs text-zinc-500 tabular-nums" title="tokens">{r.total_tokens > 0 ? fmtTokens(r.total_tokens) : ""}</span>
             <span className="w-14 text-right text-xs text-zinc-500">{duration(r)}</span>
             <span className="w-20 text-right text-xs text-zinc-500">
               <TimeAgo iso={r.created_at} />
@@ -97,11 +100,23 @@ export function RunDetail() {
   const bottom = useRef<HTMLDivElement>(null);
   const cancel = useMutation({ mutationFn: () => api("POST", `/api/runs/${id}/cancel`), onSuccess: () => qc.invalidateQueries() });
   const send = useMutation({ mutationFn: () => api("POST", `/api/runs/${id}/messages`, { text: msg }), onSuccess: () => setMsg("") });
+  // Follow the transcript only while you're at the bottom; scrolling up pauses it and
+  // scrolling back down resumes it. The page scrolls inside <main>, not the window.
   useEffect(() => {
-    if (follow) bottom.current?.scrollIntoView({ block: "end" });
-  }, [events.length, follow]);
+    const main = bottom.current?.closest("main");
+    if (!main) return;
+    const onScroll = () => setFollow(main.scrollHeight - main.scrollTop - main.clientHeight < 120);
+    main.addEventListener("scroll", onScroll, { passive: true });
+    return () => main.removeEventListener("scroll", onScroll);
+  }, [run.data?.id]);
+  useEffect(() => {
+    const main = bottom.current?.closest("main");
+    if (follow && main) main.scrollTop = main.scrollHeight;
+  }, [events, follow]);
   const usage = [...events].reverse().find((e) => e.kind === "usage")?.payload as Payload | undefined;
   const r = run.data;
+  const agents = useQuery({ queryKey: ["agents"], queryFn: () => unwrap(client.GET("/api/agents")) });
+  const settings = r ? summarizeSettings(agents.data?.find((a) => a.slug === r.agent), r.session_config as Record<string, unknown> | null) : "";
   return (
     <div className="mx-auto max-w-4xl p-6 space-y-4">
       <ErrorBox error={run.error} />
@@ -137,6 +152,12 @@ export function RunDetail() {
           <div className="flex gap-3 text-xs text-zinc-500">
             {r.worktree_path && <code title="worktree">{r.worktree_path}</code>}
             {r.container_name && <span>🐳 {r.container_name}</span>}
+            {settings && <span title="model · effort this run used">⚙ {settings}</span>}
+            {r.total_tokens > 0 && (
+              <span title={r.models.join(", ")}>
+                {fmtTokens(r.total_tokens)} tokens{r.cost_usd != null ? ` · $${r.cost_usd.toFixed(2)}*` : ""}
+              </span>
+            )}
             {usage?.used !== undefined && (
               <span>
                 context {String(usage.used)}/{String(usage.size)}

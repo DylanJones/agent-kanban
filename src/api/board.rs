@@ -61,8 +61,8 @@ pub struct Card {
     pub run: Option<CardRun>,
     /// The most recent finished run (shown as "✓ fix done 5m ago").
     pub last_run: Option<CardRun>,
-    /// If the agent that would work on this card next is paused by a usage limit, when it resumes.
-    pub waiting_on_limit: Option<String>,
+    /// What happens next: whether an agent will pick this up, it's waiting on you, or it's parked.
+    pub next: crate::orchestrator::scheduler::NextStep,
     pub updated_at: String,
     pub closed_at: Option<String>,
 }
@@ -83,6 +83,8 @@ pub struct Board {
     pub active_runs: i64,
     pub max_concurrent_runs: i64,
     pub scheduler_enabled: bool,
+    /// Cards the scheduler would start an agent on now (`next.kind == "agent"`), in dispatch order.
+    pub dispatchable: Vec<i64>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -194,7 +196,9 @@ pub async fn board(
 
     // Which roles are waiting on a paused limit group.
     let limit_groups = sqlx::query_as::<_, LimitGroup>("SELECT * FROM limit_groups ORDER BY name").fetch_all(&app.db).await?;
-    let role_waiting = crate::orchestrator::scheduler::paused_roles(&app, &project).await.unwrap_or_default();
+    let avail = crate::orchestrator::scheduler::role_availability(&app, &project).await?;
+    let now = crate::db::now();
+    let mut dispatchable: Vec<(i32, i32, f64, i64)> = vec![];
 
     let like = q.q.as_ref().map(|s| s.to_lowercase());
     let mut cols: Vec<BoardColumn> =
@@ -232,10 +236,19 @@ pub async fn board(
         {
             continue;
         }
-        let waiting_on_limit = match (i.hold, i.state.dispatch_role(), &run) {
-            (None, Some(role), None) => role_waiting.get(&role).cloned(),
-            _ => None,
-        };
+        let pr = pr_by.remove(&i.id);
+        let active = run.as_ref().and_then(|r| crate::domain::Role::parse(&r.role).map(|role| (role, r.agent.as_str())));
+        let has_open_pr = pr.as_ref().is_some_and(|p| p.state == "open");
+        let next = crate::orchestrator::scheduler::next_step(&i, active, has_open_pr, &avail, &now);
+        if next.kind == "agent" {
+            let prio = match i.priority.as_deref() {
+                Some("P0") => 0,
+                Some("P1") => 1,
+                Some("P2") => 2,
+                _ => 3,
+            };
+            dispatchable.push((prio, i.state.precedence(), i.rank, i.number));
+        }
         let col = i.state.column();
         let card = Card {
             number: i.number,
@@ -253,10 +266,10 @@ pub async fn board(
             next_attempt_at: i.next_attempt_at.clone(),
             parent: i.parent_issue_id.and_then(|p| parents.get(&p).copied()),
             comment_count: comment_counts.get(&i.id).copied().unwrap_or(0),
-            pr: pr_by.remove(&i.id),
+            pr,
             last_run: last_by.remove(&i.id),
             run,
-            waiting_on_limit,
+            next,
             updated_at: i.updated_at.clone(),
             closed_at: i.closed_at.clone(),
         };
@@ -280,5 +293,9 @@ pub async fn board(
         active_runs,
         max_concurrent_runs: crate::db::get_setting(&app.db, "max_concurrent_runs").await.unwrap_or(3),
         scheduler_enabled: crate::db::get_setting(&app.db, "scheduler_enabled").await.unwrap_or(false),
+        dispatchable: {
+            dispatchable.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal)));
+            dispatchable.into_iter().map(|d| d.3).collect()
+        },
     }))
 }

@@ -3,10 +3,13 @@
 
 pub mod agents;
 pub mod board;
+pub mod credentials;
 pub mod issues;
+pub mod mcp;
 pub mod meta;
 pub mod projects;
 pub mod pulls;
+pub mod usage;
 
 use axum::Router;
 use axum::routing::get;
@@ -49,6 +52,7 @@ curl -sS -X POST "$AKB_API/projects/$P/issues" -H "Authorization: Bearer $AKB_AU
         (name = "github", description = "GitHub import and mirroring"),
         (name = "settings", description = "Global settings and API tokens"),
         (name = "jobs", description = "Background jobs"),
+        (name = "usage", description = "Token usage reports by model, subscription, role, agent, project and day"),
         (name = "meta", description = "Health, identity, live events and the agent guide"),
     )
 )]
@@ -122,6 +126,10 @@ pub fn router() -> (Router<AppState>, utoipa::openapi::OpenApi) {
         .routes(routes!(agents::start))
         .routes(routes!(agents::permissions))
         .routes(routes!(agents::answer_permission))
+        .routes(routes!(credentials::get))
+        .routes(routes!(credentials::put_claude, credentials::delete_claude))
+        .routes(routes!(usage::report))
+        .routes(routes!(usage::subscriptions))
         .split_for_parts()
 }
 
@@ -133,6 +141,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/openapi.json", get(move || async move { ([(axum::http::header::CONTENT_TYPE, "application/json")], spec_json) }))
         .merge(Scalar::with_url("/api/docs", spec))
         .route("/login", get(meta::login))
+        .route("/mcp", axum::routing::post(mcp::post).get(mcp::get))
         .fallback(crate::web::static_handler)
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state)

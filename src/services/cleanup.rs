@@ -9,8 +9,14 @@ use crate::domain::IssueState;
 use crate::domain::models::{Issue, Project, Worktree};
 use crate::git;
 
-pub async fn on_state_change(app: &AppState, project: &Project, issue: &Issue, from: IssueState, to: IssueState) {
+/// `acting_run`: the agent run that made this change, if any. It isn't cancelled (it's finishing its
+/// own turn) and its worktree is left for its own teardown.
+pub async fn on_state_change(app: &AppState, project: &Project, issue: &Issue, from: IssueState, to: IssueState, acting_run: Option<i64>) {
     if from != to && matches!(to, IssueState::Backlog | IssueState::Done | IssueState::Closed) {
+        if acting_run.is_some() {
+            crate::github::mirror::on_issue_state(app, project, issue.id).await;
+            return;
+        }
         cancel_active_runs(app, issue.id, &format!("issue moved to {}", to.as_str())).await;
         if let Err(e) = remove_issue_worktrees(app, project, issue.id, to == IssueState::Done).await {
             tracing::warn!("cleanup of issue #{} failed: {e:#}", issue.number);

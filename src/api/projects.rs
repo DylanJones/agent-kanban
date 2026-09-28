@@ -241,6 +241,11 @@ pub async fn delete_label(State(app): State<AppState>, Human(_a): Human, Path((p
 pub struct RoleAgents {
     #[schema(value_type = std::collections::HashMap<String, String>)]
     pub roles: BTreeMap<String, String>,
+    /// Per-role overrides of the role's agent's session settings (option id → value; null removes
+    /// an override), e.g. `{"triage": {"model": "sonnet", "effort": "low"}}`.
+    #[serde(default)]
+    #[schema(value_type = std::collections::HashMap<String, std::collections::HashMap<String, Object>>)]
+    pub config: BTreeMap<String, BTreeMap<String, serde_json::Value>>,
 }
 
 /// Which agent runs each role in this project.
@@ -255,7 +260,22 @@ pub async fn get_roles(State(app): State<AppState>, _a: Actor, Path(p): Path<Str
     .fetch_all(&app.db)
     .await?;
     roles.extend(rows);
-    Ok(Json(RoleAgents { roles }))
+    let mut config = BTreeMap::new();
+    for (role, slug) in &roles {
+        let c: Option<String> = sqlx::query_scalar(
+            "SELECT c.config FROM role_session_config c JOIN agent_definitions a ON a.id = c.agent_definition_id
+              WHERE c.project_id = ? AND c.role = ? AND a.slug = ?",
+        )
+        .bind(project.id)
+        .bind(role)
+        .bind(slug)
+        .fetch_optional(&app.db)
+        .await?;
+        if let Some(m) = c.and_then(|c| serde_json::from_str::<BTreeMap<String, serde_json::Value>>(&c).ok()).filter(|m| !m.is_empty()) {
+            config.insert(role.clone(), m);
+        }
+    }
+    Ok(Json(RoleAgents { roles, config }))
 }
 
 /// Assign agents to roles for this project.
@@ -280,6 +300,44 @@ pub async fn put_roles(
             .bind(aid)
             .execute(&app.db)
             .await?;
+    }
+    // Settings overrides apply to whichever agent now handles the role.
+    let Json(current) = get_roles(State(app.clone()), a.clone(), Path(p.clone())).await?;
+    for (role, over) in &req.config {
+        let r = Role::parse(role).ok_or_else(|| ApiError::bad(format!("unknown role {role}")))?;
+        let slug = current.roles.get(r.as_str()).ok_or_else(|| ApiError::bad(format!("no agent assigned to {role}")))?;
+        let agent = sqlx::query_as::<_, crate::domain::models::AgentDefinition>("SELECT * FROM agent_definitions WHERE slug = ?")
+            .bind(slug)
+            .fetch_one(&app.db)
+            .await?;
+        let mut merged: BTreeMap<String, serde_json::Value> = sqlx::query_scalar::<_, String>(
+            "SELECT config FROM role_session_config WHERE project_id = ? AND role = ? AND agent_definition_id = ?",
+        )
+        .bind(project.id)
+        .bind(r.as_str())
+        .bind(agent.id)
+        .fetch_optional(&app.db)
+        .await?
+        .and_then(|c| serde_json::from_str(&c).ok())
+        .unwrap_or_default();
+        for (k, v) in over {
+            if v.is_null() {
+                merged.remove(k);
+            } else {
+                super::agents::validate_setting(&agent, k, v)?;
+                merged.insert(k.clone(), v.clone());
+            }
+        }
+        sqlx::query(
+            "INSERT INTO role_session_config(project_id, role, agent_definition_id, config) VALUES (?, ?, ?, ?)
+             ON CONFLICT DO UPDATE SET config = excluded.config",
+        )
+        .bind(project.id)
+        .bind(r.as_str())
+        .bind(agent.id)
+        .bind(serde_json::to_string(&merged).unwrap())
+        .execute(&app.db)
+        .await?;
     }
     app.bus.emit("projects.updated", Some(&p), None, None, None);
     get_roles(State(app), a, Path(p)).await

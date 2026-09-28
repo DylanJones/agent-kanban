@@ -79,12 +79,14 @@ pub async fn build_image(app: &AppState, project: &Project, log: &mut (dyn FnMut
     let hash = hex::encode(&Sha256::digest(format!("{base_df}\n---\n{overlay_tmpl}").as_bytes())[..6]);
     let base_tag = format!("akb-base/{}:{hash}", project.slug);
     let tag = format!("akb/{}:{hash}", project.slug);
-    let context = project.container_context.clone().unwrap_or_else(|| project.repo_path.clone());
-    log(format!("building base image {base_tag} (context {context})"));
-    build(&base_tag, &base_df, Path::new(&context), log).await?;
-    let overlay = overlay_tmpl.replace("{{BASE}}", &base_tag);
+    // Worktrees are mounted at run time, so the image normally needs no build context; set
+    // `container_context` only if the Dockerfile COPYs files.
     let empty = app.config.tmp_dir().join("empty-context");
     tokio::fs::create_dir_all(&empty).await?;
+    let context = project.container_context.clone().map(std::path::PathBuf::from).unwrap_or_else(|| empty.clone());
+    log(format!("building base image {base_tag} (context {})", context.display()));
+    build(&base_tag, &base_df, &context, log).await?;
+    let overlay = overlay_tmpl.replace("{{BASE}}", &base_tag);
     log(format!("building agent overlay {tag}"));
     build(&tag, &overlay, &empty, log).await?;
     sqlx::query("UPDATE projects SET container_image = ?, updated_at = ? WHERE id = ?")
@@ -127,6 +129,8 @@ pub async fn run_args(
         "--label".into(),
         MANAGED_LABEL.into(),
         "--label".into(),
+        format!("akb.instance={}", app.config.instance_id()),
+        "--label".into(),
         format!("akb.run={run_id}"),
         "-v".into(),
         format!("{wt}:{wt}"),
@@ -138,6 +142,7 @@ pub async fn run_args(
         wt.clone(),
         "--add-host=host.docker.internal:host-gateway".into(),
     ];
+    let secrets = app.config.current_secrets();
     let mut envs: Vec<(String, String)> = env.to_vec();
     for (k, v) in agent.env.0.iter() {
         if k != "CODEX_CONFIG" && k != "INITIAL_AGENT_MODE" {
@@ -146,12 +151,17 @@ pub async fn run_args(
     }
     match agent.harness.as_str() {
         "claude" => {
-            if let Some(t) = &app.config.secrets.claude_code_oauth_token {
+            if let Some(t) = secrets.claude_code_oauth_token.as_ref().filter(|_| !env.iter().any(|(k, _)| k == "CLAUDE_CODE_OAUTH_TOKEN")) {
                 envs.push(("CLAUDE_CODE_OAUTH_TOKEN".into(), t.clone()));
             }
         }
         "codex" => {
             envs.push(("INITIAL_AGENT_MODE".into(), "agent-full-access".into()));
+            // Keep Codex's session logs (token usage) on the host.
+            let sessions = app.config.data_dir.join("codex-sessions");
+            let _ = std::fs::create_dir_all(&sessions);
+            a.push("-v".into());
+            a.push(format!("{}:/home/agent/.codex/sessions", sessions.display()));
             if let Some(home) = dirs::home_dir() {
                 let auth = home.join(".codex/auth.json");
                 if auth.exists() {
@@ -162,7 +172,7 @@ pub async fn run_args(
         }
         _ => {}
     }
-    for (k, v) in &app.config.secrets.container_env {
+    for (k, v) in &secrets.container_env {
         envs.push((k.clone(), v.clone()));
     }
     for (name_key, cfg) in [("GIT_AUTHOR_NAME", "user.name"), ("GIT_AUTHOR_EMAIL", "user.email")] {
@@ -185,14 +195,50 @@ pub async fn run_args(
     Ok(ContainerLaunch { name, args: a })
 }
 
+/// `docker run` arguments that execute the project's setup script in its image, with the same
+/// mounts an agent run gets (worktree and shared .git at identical paths, ccache volume).
+pub async fn setup_args(app: &AppState, project: &Project, worktree: &Path, script: &str) -> anyhow::Result<Vec<String>> {
+    let image = project.container_image.clone().ok_or_else(|| anyhow::anyhow!("container image not built yet (Project settings → Build image)"))?;
+    let common = crate::git::common_dir(&project.repo_path).await?;
+    let wt = worktree.to_string_lossy().to_string();
+    Ok(vec![
+        "run".into(),
+        "--rm".into(),
+        "--label".into(),
+        MANAGED_LABEL.into(),
+        "--label".into(),
+        format!("akb.instance={}", app.config.instance_id()),
+        "-v".into(),
+        format!("{wt}:{wt}"),
+        "-v".into(),
+        format!("{common}:{common}"),
+        "-v".into(),
+        format!("akb-ccache-{}:/home/agent/.ccache", project.slug),
+        "-w".into(),
+        wt,
+        "-e".into(),
+        format!("AKB_REPO={}", project.repo_path),
+        image,
+        "bash".into(),
+        "-lc".into(),
+        script.into(),
+    ])
+}
+
 pub async fn kill(name: &str) {
     let _ = docker(&["rm", "-f", name]).await;
 }
 
-/// Remove containers left behind by a previous server process.
-pub async fn sweep_orphans() {
-    if let Ok(ids) = docker(&["ps", "-aq", "--filter", &format!("label={MANAGED_LABEL}")]).await {
-        for id in ids.lines().filter(|l| !l.is_empty()) {
+/// Remove containers left behind by a previous run of *this* server instance (and unlabelled
+/// ones from builds before instance labels existed). Other instances' containers are left alone.
+pub async fn sweep_orphans(instance: &str) {
+    let Ok(list) = docker(&["ps", "-a", "--filter", &format!("label={MANAGED_LABEL}"), "--format", "{{.ID}} {{.Label \"akb.instance\"}}"]).await else {
+        return;
+    };
+    for line in list.lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(id), label) = (parts.next(), parts.next()) else { continue };
+        if label.is_none_or(|l| l == instance) {
             let _ = docker(&["rm", "-f", id]).await;
         }
     }

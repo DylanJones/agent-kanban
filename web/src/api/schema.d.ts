@@ -93,6 +93,41 @@ export interface paths {
         patch: operations["issues_edit_comment"];
         trace?: never;
     };
+    "/api/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Which container credentials are configured. */
+        get: operations["credentials_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/credentials/claude-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Save Claude's long-lived token for container runs, after checking it works there. */
+        put: operations["credentials_put_claude"];
+        post?: never;
+        /** Remove Claude's container token. */
+        delete: operations["credentials_delete_claude"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/events/stream": {
         parameters: {
             query?: never;
@@ -1032,6 +1067,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Token usage across agent runs, grouped by a dimension. */
+        get: operations["usage_report"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/usage/subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Subscription (limit group) status: pause state, usage windows and recent token totals. */
+        get: operations["usage_subscriptions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1040,6 +1109,9 @@ export interface components {
             args: string[];
             /** @description Executable that speaks ACP on stdio. */
             command: string;
+            /** @description The settings this agent last offered (ACP `configOptions`): ids, names, categories and choices. */
+            config_options?: Record<string, never>[] | null;
+            config_options_at?: string | null;
             /** @description Command (argv) to run inside a container instead of `command`/`args`. */
             container_command?: string[] | null;
             /** @description Same, when running inside a container (default `auto_allow`: the container is the sandbox). */
@@ -1069,6 +1141,10 @@ export interface components {
             permission_policy: string;
             /** @description Ordered rules for the `allowlist` policy; the first match wins. */
             permission_rules: components["schemas"]["PermissionRule"][];
+            /** @description Default session settings (ACP config option id → value), e.g. `{"model": "opus", "effort": "high"}`. */
+            session_config: {
+                [key: string]: Record<string, never>;
+            };
             /** @description ACP session mode to select after `session/new` when running on the host. */
             session_mode_id?: string | null;
             slug: string;
@@ -1095,6 +1171,13 @@ export interface components {
             permission_policy?: string | null;
             /** @description Rules for the `allowlist` policy (first match wins; unmatched prompts go to the Inbox). */
             permission_rules?: components["schemas"]["PermissionRule"][] | null;
+            /**
+             * @description Default session settings to merge in (option id → value; null removes), e.g.
+             *     `{"model": "opus", "effort": "xhigh"}`. Valid ids/values are in `config_options`.
+             */
+            session_config?: {
+                [key: string]: Record<string, never>;
+            } | null;
             session_mode_id?: string | null;
             slug?: string | null;
         };
@@ -1114,6 +1197,8 @@ export interface components {
             nudges: number;
             outcome?: string | null;
             role: components["schemas"]["Role"];
+            /** @description The session settings the run actually used (option id → value), e.g. model and effort. */
+            session_config?: Record<string, never> | null;
             start_head_sha?: string | null;
             started_at?: string | null;
             /** @description `queued`, `preparing`, `running`, `succeeded`, `failed`, `cancelled`, `rate_limited` or `interrupted`. */
@@ -1125,6 +1210,8 @@ export interface components {
         };
         AgentTestResult: {
             agent_info?: Record<string, never> | null;
+            /** @description Settings the agent offers (ACP `configOptions`), also cached on the agent. */
+            config_options?: Record<string, never>[] | null;
             error?: string | null;
             /** @description `quota`, `rate`, `auth` if a limit was detected. */
             limit?: string | null;
@@ -1146,6 +1233,8 @@ export interface components {
             /** Format: int64 */
             active_runs: number;
             columns: components["schemas"]["BoardColumn"][];
+            /** @description Cards the scheduler would start an agent on now (`next.kind == "agent"`), in dispatch order. */
+            dispatchable: number[];
             labels: components["schemas"]["Label"][];
             limit_groups: components["schemas"]["LimitGroup"][];
             /** Format: int64 */
@@ -1169,6 +1258,8 @@ export interface components {
             hold_reason?: string | null;
             labels: components["schemas"]["LabelRef"][];
             last_run?: components["schemas"]["CardRun"] | null;
+            /** @description What happens next: whether an agent will pick this up, it's waiting on you, or it's parked. */
+            next: components["schemas"]["NextStep"];
             next_attempt_at?: string | null;
             /** Format: int64 */
             number: number;
@@ -1184,8 +1275,6 @@ export interface components {
             state: components["schemas"]["IssueState"];
             title: string;
             updated_at: string;
-            /** @description If the agent that would work on this card next is paused by a usage limit, when it resumes. */
-            waiting_on_limit?: string | null;
         };
         CardPr: {
             /** @description Approved at the current head. */
@@ -1208,6 +1297,12 @@ export interface components {
             role: string;
             started_at?: string | null;
             status: string;
+        };
+        ClaudeToken: {
+            /** @description The token printed by `claude setup-token` (starts with `sk-ant-oat`). */
+            token: string;
+            /** @description Check the token by running Claude in a project container before saving (default true). */
+            verify?: boolean;
         };
         /**
          * @description The four board columns.
@@ -1246,6 +1341,11 @@ export interface components {
             api_url: string;
             /** Format: int64 */
             number: number;
+            /**
+             * @description Open or recently closed issues with similar titles. If one is the same bug, comment there
+             *     instead (triage closes true duplicates).
+             */
+            possible_duplicates: components["schemas"]["SimilarIssue"][];
             state: components["schemas"]["IssueState"];
             /** @description Browser URL of the issue. */
             url: string;
@@ -1256,6 +1356,14 @@ export interface components {
             name: string;
             /** @description Shown once; use as `Authorization: Bearer <token>`. */
             token: string;
+        };
+        Credentials: {
+            /** @description A long-lived Claude token for containers is configured. */
+            claude_token: boolean;
+            /** @description `~/.codex/auth.json` exists (mounted into Codex containers). */
+            codex_auth: boolean;
+            /** @description Projects that run agents in containers. */
+            container_projects: string[];
         };
         CurrentRun: {
             branch?: string | null;
@@ -1273,6 +1381,14 @@ export interface components {
             /** Format: int64 */
             run_id: number;
             worktree?: string | null;
+        };
+        DailyUsage: {
+            day: string;
+            /** Format: int64 */
+            output_tokens: number;
+            subscription: string;
+            /** Format: int64 */
+            total_tokens: number;
         };
         DecisionAnswer: {
             /** @description The decision, recorded as a `decision` comment agents will see as settled. */
@@ -1574,6 +1690,25 @@ export interface components {
         NewToken: {
             name: string;
         };
+        /** @description The next thing that will happen to an issue, as the scheduler sees it. */
+        NextStep: {
+            /** @description A fix the UI can offer, e.g. `connect-claude` (set up Claude's container token). */
+            action?: string | null;
+            agent?: string | null;
+            /** @description Longer explanation (tooltip). */
+            detail?: string | null;
+            /**
+             * @description `agent`: the scheduler will start an agent on it · `running`: an agent is working on it ·
+             *     `waiting`: an agent will pick it up later (usage limit or retry backoff) · `human`: waiting for you ·
+             *     `blocked`: on hold or misconfigured · `parked`: no automation (backlog) · `done`.
+             */
+            kind: string;
+            /** @description Short label for the card, e.g. "Next: Fix · claude". */
+            label: string;
+            role?: components["schemas"]["Role"] | null;
+            /** @description For `waiting`: when it becomes eligible again. */
+            until?: string | null;
+        };
         PauseRequest: {
             /** @description RFC3339 time to resume automatically; omit to pause until resumed. */
             until?: string | null;
@@ -1802,6 +1937,15 @@ export interface components {
         Role: "triage" | "fix" | "review" | "merge_prep";
         /** @description Agent definition slug assigned to each role for this project (falls back to the global default). */
         RoleAgents: {
+            /**
+             * @description Per-role overrides of the role's agent's session settings (option id → value; null removes
+             *     an override), e.g. `{"triage": {"model": "sonnet", "effort": "low"}}`.
+             */
+            config?: {
+                [key: string]: {
+                    [key: string]: Record<string, never>;
+                };
+            };
             roles: {
                 [key: string]: string;
             };
@@ -1821,14 +1965,28 @@ export interface components {
         };
         RunView: components["schemas"]["AgentRun"] & {
             agent: string;
+            /** Format: double */
+            cost_usd?: number | null;
             /** Format: int64 */
             issue?: number | null;
             issue_title?: string | null;
             /** @description True while the run's task is alive in this server process. */
             live: boolean;
+            models: string[];
             /** Format: int64 */
             pr?: number | null;
             project: string;
+            /**
+             * Format: int64
+             * @description Tokens used by this run (all models).
+             */
+            total_tokens: number;
+        };
+        SavedCredential: {
+            saved: boolean;
+            test?: components["schemas"]["AgentTestResult"] | null;
+            /** @description Project whose container was used for verification. */
+            tested_in?: string | null;
         };
         Settings: {
             /** @description Default agent slug per role (projects may override). */
@@ -1865,12 +2023,36 @@ export interface components {
             } | null;
             scheduler_enabled?: boolean | null;
         };
+        SimilarIssue: {
+            /** Format: int64 */
+            number: number;
+            state: components["schemas"]["IssueState"];
+            title: string;
+        };
         StartRun: {
             /** @description Agent slug; defaults to the project's agent for the role. */
             agent?: string | null;
             role?: components["schemas"]["Role"] | null;
         };
+        SubscriptionUsage: {
+            agents: string[];
+            /** @description Limit group (e.g. `claude`, `codex`). */
+            name: string;
+            pause_kind?: string | null;
+            paused: boolean;
+            paused_until?: string | null;
+            plan?: string | null;
+            /** Format: int64 */
+            tokens_24h: number;
+            /** Format: int64 */
+            tokens_7d: number;
+            updated_at: string;
+            /** @description Latest usage-window readings reported by the agent. */
+            windows: components["schemas"]["UsageWindow"][];
+        };
         TestRequest: {
+            /** @description Test the way this project launches agents (e.g. inside its container). */
+            project?: string | null;
             /** @description Also send a tiny prompt (uses a little quota) to check the subscription works. */
             prompt?: boolean;
         };
@@ -1882,8 +2064,56 @@ export interface components {
             close_reason?: string | null;
             /** @description Optional comment recorded on the issue explaining the move. */
             comment?: string | null;
+            /**
+             * Format: int64
+             * @description For duplicates: the issue this one duplicates. Its thread gets a note with this report,
+             *     so any new repro details aren't lost. Implies `close_reason: duplicate`.
+             */
+            duplicate_of?: number | null;
             /** @description Target state. */
             to: components["schemas"]["IssueState"];
+        };
+        UsageReport: {
+            /** @description Daily totals split by subscription, for charts. */
+            daily: components["schemas"]["DailyUsage"][];
+            from: string;
+            group_by: string;
+            rows: components["schemas"]["UsageRow"][];
+            to: string;
+            totals: components["schemas"]["UsageRow"];
+        };
+        UsageRow: {
+            /** Format: int64 */
+            cache_write_tokens: number;
+            /** Format: int64 */
+            cached_input_tokens: number;
+            /**
+             * Format: double
+             * @description API-equivalent cost where the agent reports one (Claude); null otherwise.
+             */
+            cost_usd?: number | null;
+            /** Format: int64 */
+            input_tokens: number;
+            /** @description Group key (model name, role, day...). */
+            key: string;
+            /** Format: int64 */
+            output_tokens: number;
+            /** Format: int64 */
+            reasoning_tokens: number;
+            /** Format: int64 */
+            runs: number;
+            /** Format: int64 */
+            total_tokens: number;
+        };
+        UsageWindow: {
+            /** @description e.g. `five_hour`, `seven_day`, `primary`. */
+            name: string;
+            resets_at?: string | null;
+            /**
+             * Format: double
+             * @description 0–100.
+             */
+            used_percent?: number | null;
         };
     };
     responses: never;
@@ -2087,6 +2317,73 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Comment"];
                 };
+            };
+        };
+    };
+    credentials_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Credentials"];
+                };
+            };
+        };
+    };
+    credentials_put_claude: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaudeToken"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedCredential"];
+                };
+            };
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedCredential"];
+                };
+            };
+        };
+    };
+    credentials_delete_claude: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -3707,6 +4004,53 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    usage_report: {
+        parameters: {
+            query?: {
+                /** @description Start (RFC3339 or YYYY-MM-DD). Default: 30 days ago. */
+                from?: string | null;
+                /** @description End (exclusive). Default: now. */
+                to?: string | null;
+                /** @description Project slug filter. */
+                project?: string | null;
+                /** @description `model` (default), `subscription`, `role`, `agent`, `project`, `issue`, `day`, `harness`. */
+                group_by?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageReport"];
+                };
+            };
+        };
+    };
+    usage_subscriptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionUsage"][];
+                };
             };
         };
     };
