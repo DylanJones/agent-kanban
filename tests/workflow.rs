@@ -6,6 +6,7 @@ use agent_kanban::domain::{Actor, Hold, IssueState, Role};
 use agent_kanban::orchestrator::scheduler;
 use agent_kanban::services;
 use common::*;
+use serde_json::json;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn triage_fix_review_merge() {
@@ -394,6 +395,324 @@ async fn host_agents_need_the_flag_without_a_container() {
     scheduler::tick(&app).await.unwrap();
     let runs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_runs").fetch_one(&app.db).await.unwrap();
     assert_eq!(runs, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fix_run_resumes_the_previous_fix_run_session_after_review_changes() {
+    let env = setup().await;
+    fake_agent(&env.app, "f-fix", "fix", "fake").await;
+    fake_agent(&env.app, "f-changes", "review_changes", "fake").await;
+    let i = new_issue(&env, "Needs changes", IssueState::Ready).await;
+
+    // First fix run on the issue: nothing to resume, starts a fresh session.
+    let r1 = run(&env, i.number, Role::Fix, "f-fix").await;
+    assert_eq!(r1.status, "succeeded", "{}", transcript(&env, r1.id).await);
+    let t1 = transcript(&env, r1.id).await;
+    assert!(t1.contains("session started"), "{t1}");
+    assert!(!t1.contains("resumed"), "{t1}");
+
+    run(&env, i.number, Role::Review, "f-changes").await;
+    assert_eq!(issue(&env, i.number).await.state, IssueState::ChangesRequested);
+
+    // Second fix run reloads the first run's session (same agent, same issue) instead of
+    // reconstructing everything from the prompt alone.
+    let r2 = run(&env, i.number, Role::Fix, "f-fix").await;
+    assert_eq!(r2.status, "succeeded", "{}", transcript(&env, r2.id).await);
+    let t2 = transcript(&env, r2.id).await;
+    assert!(t2.contains("session resumed from a previous run"), "{t2}");
+    assert_eq!(r2.acp_session_id.as_deref(), Some("s1"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fix_run_falls_back_to_a_new_session_when_resume_is_unsupported_or_fails() {
+    let env = setup().await;
+    fake_agent(&env.app, "f-changes", "review_changes", "fake").await;
+
+    // The adapter doesn't advertise session/load support at all: never attempted, no fallback
+    // noise, and the run still succeeds cold.
+    fake_agent_env(&env.app, "f-fix-unsupported", "fix", "fake", json!({"FAKE_LOAD_SESSION": "unsupported"})).await;
+    let a = new_issue(&env, "A", IssueState::Ready).await;
+    run(&env, a.number, Role::Fix, "f-fix-unsupported").await;
+    run(&env, a.number, Role::Review, "f-changes").await;
+    let r2 = run(&env, a.number, Role::Fix, "f-fix-unsupported").await;
+    assert_eq!(r2.status, "succeeded", "{}", transcript(&env, r2.id).await);
+    assert!(!transcript(&env, r2.id).await.contains("resumed"), "{}", transcript(&env, r2.id).await);
+
+    // The adapter advertises support but rejects the reload (its own session state didn't
+    // survive, e.g. a recycled container): the client falls back to a fresh session.
+    fake_agent_env(&env.app, "f-fix-fail", "fix", "fake", json!({"FAKE_LOAD_SESSION": "fail"})).await;
+    let b = new_issue(&env, "B", IssueState::Ready).await;
+    run(&env, b.number, Role::Fix, "f-fix-fail").await;
+    run(&env, b.number, Role::Review, "f-changes").await;
+    let r2 = run(&env, b.number, Role::Fix, "f-fix-fail").await;
+    assert_eq!(r2.status, "succeeded", "{}", transcript(&env, r2.id).await);
+    let t2 = transcript(&env, r2.id).await;
+    assert!(t2.contains("couldn't resume session"), "{t2}");
+    assert!(!t2.contains("resumed from a previous run"), "{t2}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resumed_session_usage_is_not_double_counted() {
+    let env = setup().await;
+    fake_agent(&env.app, "f-changes", "review_changes", "fake").await;
+    let i = new_issue(&env, "Needs changes", IssueState::Ready).await;
+    // Outside the worktree: a real adapter's cumulative usage counter survives across the
+    // separate processes each run spawns for the same resumed session, unlike worktree files.
+    let usage_state = env.repo.parent().unwrap().join("usage-state.json").to_string_lossy().into_owned();
+
+    fake_agent_env(&env.app, "f-fix-usage", "fix", "fake", json!({"FAKE_USAGE_STEP": "100", "FAKE_USAGE_STATE": usage_state})).await;
+    let r1 = run(&env, i.number, Role::Fix, "f-fix-usage").await;
+    assert_eq!(r1.status, "succeeded", "{}", transcript(&env, r1.id).await);
+
+    run(&env, i.number, Role::Review, "f-changes").await;
+    assert_eq!(issue(&env, i.number).await.state, IssueState::ChangesRequested);
+
+    // The adapter's cumulative session usage is now 100 (run 1) + 50 (this run) = 150; only 50
+    // of that belongs to run 2. Update in place (not another `fake_agent_env` call, which would
+    // replace the agent_definitions row and break the FK from run 1's already-recorded run).
+    sqlx::query("UPDATE agent_definitions SET env = ? WHERE slug = 'f-fix-usage'")
+        .bind(json!({"FAKE_MODE": "fix", "FAKE_USAGE_STEP": "50", "FAKE_USAGE_STATE": usage_state}).to_string())
+        .execute(&env.app.db)
+        .await
+        .unwrap();
+    let r2 = run(&env, i.number, Role::Fix, "f-fix-usage").await;
+    assert_eq!(r2.status, "succeeded", "{}", transcript(&env, r2.id).await);
+    assert!(transcript(&env, r2.id).await.contains("session resumed from a previous run"));
+    assert_eq!(r2.acp_session_id, r1.acp_session_id);
+
+    let total1: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(total_tokens),0) FROM run_usage WHERE run_id = ?")
+        .bind(r1.id)
+        .fetch_one(&env.app.db)
+        .await
+        .unwrap();
+    let total2: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(total_tokens),0) FROM run_usage WHERE run_id = ?")
+        .bind(r2.id)
+        .fetch_one(&env.app.db)
+        .await
+        .unwrap();
+    assert_eq!(total1, 100, "run 1's own usage");
+    assert_eq!(total2, 50, "run 2's own usage, not the session's 150-token cumulative total");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resumed_session_cost_is_not_double_counted() {
+    let env = setup().await;
+    fake_agent(&env.app, "f-changes", "review_changes", "fake").await;
+    let i = new_issue(&env, "Needs changes", IssueState::Ready).await;
+    // Same idea as the cumulative token counter: the adapter's cumulative session cost survives
+    // across the separate processes each run spawns for the same resumed session.
+    let cost_state = env.repo.parent().unwrap().join("cost-state.json").to_string_lossy().into_owned();
+
+    // FAKE_USAGE_STEP just needs to be present so the run reports a `usage` payload at all (cost
+    // is only stored alongside it); its own accounting is covered by the token-doubling test.
+    fake_agent_env(&env.app, "f-fix-cost", "fix", "fake", json!({"FAKE_USAGE_STEP": "1", "FAKE_COST_STEP": "1.00", "FAKE_COST_STATE": cost_state})).await;
+    let r1 = run(&env, i.number, Role::Fix, "f-fix-cost").await;
+    assert_eq!(r1.status, "succeeded", "{}", transcript(&env, r1.id).await);
+
+    run(&env, i.number, Role::Review, "f-changes").await;
+    assert_eq!(issue(&env, i.number).await.state, IssueState::ChangesRequested);
+
+    // The adapter's cumulative session cost is now $1.00 (run 1) + $0.50 (this run) = $1.50; only
+    // $0.50 of that belongs to run 2.
+    sqlx::query("UPDATE agent_definitions SET env = ? WHERE slug = 'f-fix-cost'")
+        .bind(json!({"FAKE_MODE": "fix", "FAKE_USAGE_STEP": "1", "FAKE_COST_STEP": "0.50", "FAKE_COST_STATE": cost_state}).to_string())
+        .execute(&env.app.db)
+        .await
+        .unwrap();
+    let r2 = run(&env, i.number, Role::Fix, "f-fix-cost").await;
+    assert_eq!(r2.status, "succeeded", "{}", transcript(&env, r2.id).await);
+    assert!(transcript(&env, r2.id).await.contains("session resumed from a previous run"));
+
+    let cost1: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(cost_usd),0.0) FROM run_usage WHERE run_id = ?").bind(r1.id).fetch_one(&env.app.db).await.unwrap();
+    let cost2: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(cost_usd),0.0) FROM run_usage WHERE run_id = ?").bind(r2.id).fetch_one(&env.app.db).await.unwrap();
+    assert!((cost1 - 1.00).abs() < 1e-9, "run 1's own cost: {cost1}");
+    assert!((cost2 - 0.50).abs() < 1e-9, "run 2's own cost, not the session's $1.50 cumulative total: {cost2}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn backfill_never_rewrites_an_earlier_runs_settled_usage() {
+    let env = setup().await;
+    fake_agent(&env.app, "f-changes", "review_changes", "fake").await;
+    let i = new_issue(&env, "Needs changes", IssueState::Ready).await;
+    let usage_state = env.repo.parent().unwrap().join("usage-state.json").to_string_lossy().into_owned();
+
+    // Both runs finish with only an approximate ACP-reported total (the precise session log
+    // isn't available yet, e.g. it hasn't been synced from a container).
+    fake_agent_env(&env.app, "f-fix-log", "fix", "fake", json!({"FAKE_USAGE_STEP": "100", "FAKE_USAGE_STATE": usage_state})).await;
+    let r1 = run(&env, i.number, Role::Fix, "f-fix-log").await;
+    assert_eq!(r1.status, "succeeded", "{}", transcript(&env, r1.id).await);
+
+    run(&env, i.number, Role::Review, "f-changes").await;
+    assert_eq!(issue(&env, i.number).await.state, IssueState::ChangesRequested);
+
+    sqlx::query("UPDATE agent_definitions SET env = ? WHERE slug = 'f-fix-log'")
+        .bind(json!({"FAKE_MODE": "fix", "FAKE_USAGE_STEP": "50", "FAKE_USAGE_STATE": usage_state}).to_string())
+        .execute(&env.app.db)
+        .await
+        .unwrap();
+    let r2 = run(&env, i.number, Role::Fix, "f-fix-log").await;
+    assert_eq!(r2.status, "succeeded", "{}", transcript(&env, r2.id).await);
+    assert_eq!(r2.acp_session_id, r1.acp_session_id);
+    let session = r1.acp_session_id.clone().unwrap();
+
+    // The precise session log now shows up (e.g. synced from the container after the fact), with
+    // a cumulative total for the *whole* session that differs from the sum of the two runs'
+    // approximate ACP reports (190, not 150) — as a real adapter's own count would, since the
+    // ACP `usage` field and the session log are independent, imprecise-vs-precise sources.
+    sqlx::query("UPDATE agent_definitions SET harness = 'codex' WHERE slug = 'f-fix-log'").execute(&env.app.db).await.unwrap();
+    let codex_dir = env.app.config.data_dir.join("codex-sessions");
+    std::fs::create_dir_all(&codex_dir).unwrap();
+    std::fs::write(
+        codex_dir.join(format!("rollout-{session}.jsonl")),
+        [
+            json!({"type": "turn_context", "payload": {"model": "f-fix-log"}}).to_string(),
+            json!({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {
+                "input_tokens": 190, "cached_input_tokens": 0, "cache_write_input_tokens": 0,
+                "output_tokens": 0, "reasoning_output_tokens": 0, "total_tokens": 190
+            }}}}).to_string(),
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+
+    agent_kanban::usage::backfill(&env.app).await;
+
+    let row1: (i64, String) = sqlx::query_as("SELECT total_tokens, source FROM run_usage WHERE run_id = ?").bind(r1.id).fetch_one(&env.app.db).await.unwrap();
+    let row2: (i64, String) = sqlx::query_as("SELECT total_tokens, source FROM run_usage WHERE run_id = ?").bind(r2.id).fetch_one(&env.app.db).await.unwrap();
+    assert_eq!(row1, (100, "acp".to_string()), "run 1 is not the session's latest run, so its settled total must never be rewritten from a log that now also includes run 2's activity");
+    assert_eq!(row2, (90, "codex_log".to_string()), "run 2 (the latest run) gets the precise log total minus run 1's frozen 100, not the full 190");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn backfill_reconciles_baseline_across_a_model_label_change() {
+    let env = setup().await;
+    fake_agent(&env.app, "f-changes", "review_changes", "fake").await;
+    let i = new_issue(&env, "Needs changes", IssueState::Ready).await;
+    let usage_state = env.repo.parent().unwrap().join("usage-state.json").to_string_lossy().into_owned();
+
+    // Both runs finish with only an approximate ACP-reported total, with no model metadata (the
+    // fake agent doesn't report one), so it's stored under the agent slug.
+    fake_agent_env(&env.app, "f-fix-model", "fix", "fake", json!({"FAKE_USAGE_STEP": "100", "FAKE_USAGE_STATE": usage_state})).await;
+    let r1 = run(&env, i.number, Role::Fix, "f-fix-model").await;
+    assert_eq!(r1.status, "succeeded", "{}", transcript(&env, r1.id).await);
+
+    run(&env, i.number, Role::Review, "f-changes").await;
+    assert_eq!(issue(&env, i.number).await.state, IssueState::ChangesRequested);
+
+    sqlx::query("UPDATE agent_definitions SET env = ? WHERE slug = 'f-fix-model'")
+        .bind(json!({"FAKE_MODE": "fix", "FAKE_USAGE_STEP": "50", "FAKE_USAGE_STATE": usage_state}).to_string())
+        .execute(&env.app.db)
+        .await
+        .unwrap();
+    let r2 = run(&env, i.number, Role::Fix, "f-fix-model").await;
+    assert_eq!(r2.status, "succeeded", "{}", transcript(&env, r2.id).await);
+    assert_eq!(r2.acp_session_id, r1.acp_session_id);
+    let session = r1.acp_session_id.clone().unwrap();
+
+    // The precise session log now shows up naming the *real* model, which differs from the agent
+    // slug ("f-fix-model") the earlier ACP-fallback rows were stored under. The baseline lookup
+    // must still find run 1's 100 tokens rather than matching on model and missing it.
+    sqlx::query("UPDATE agent_definitions SET harness = 'codex' WHERE slug = 'f-fix-model'").execute(&env.app.db).await.unwrap();
+    let codex_dir = env.app.config.data_dir.join("codex-sessions");
+    std::fs::create_dir_all(&codex_dir).unwrap();
+    std::fs::write(
+        codex_dir.join(format!("rollout-{session}.jsonl")),
+        [
+            json!({"type": "turn_context", "payload": {"model": "gpt-6-codex"}}).to_string(),
+            json!({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {
+                "input_tokens": 190, "cached_input_tokens": 0, "cache_write_input_tokens": 0,
+                "output_tokens": 0, "reasoning_output_tokens": 0, "total_tokens": 190
+            }}}}).to_string(),
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+
+    agent_kanban::usage::backfill(&env.app).await;
+
+    let row1: (i64, String) = sqlx::query_as("SELECT total_tokens, source FROM run_usage WHERE run_id = ?").bind(r1.id).fetch_one(&env.app.db).await.unwrap();
+    let row2: (i64, String, String) =
+        sqlx::query_as("SELECT total_tokens, model, source FROM run_usage WHERE run_id = ?").bind(r2.id).fetch_one(&env.app.db).await.unwrap();
+    assert_eq!(row1, (100, "acp".to_string()), "run 1's settled total is untouched");
+    assert_eq!(row2, (90, "gpt-6-codex".to_string(), "codex_log".to_string()), "run 2 gets 190 minus run 1's 100, found despite the model label change");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resume_is_skipped_when_the_requested_settings_changed() {
+    let env = setup().await;
+    fake_agent(&env.app, "f-changes", "review_changes", "fake").await;
+    let i = new_issue(&env, "Needs changes", IssueState::Ready).await;
+
+    // First fix run pins an explicit model.
+    fake_agent(&env.app, "f-fix-cfg", "fix", "fake").await;
+    sqlx::query("UPDATE agent_definitions SET session_config = ? WHERE slug = 'f-fix-cfg'")
+        .bind(json!({"model": "big"}).to_string())
+        .execute(&env.app.db)
+        .await
+        .unwrap();
+    let r1 = run(&env, i.number, Role::Fix, "f-fix-cfg").await;
+    assert_eq!(r1.status, "succeeded", "{}", transcript(&env, r1.id).await);
+    assert_eq!(r1.session_config.unwrap().0["model"], "big");
+
+    run(&env, i.number, Role::Review, "f-changes").await;
+    assert_eq!(issue(&env, i.number).await.state, IssueState::ChangesRequested);
+
+    // The override is cleared, returning to the adapter's default model. Resuming the old
+    // session would silently keep "big" active instead, so the run must start fresh.
+    sqlx::query("UPDATE agent_definitions SET session_config = '{}' WHERE slug = 'f-fix-cfg'").execute(&env.app.db).await.unwrap();
+    let r2 = run(&env, i.number, Role::Fix, "f-fix-cfg").await;
+    assert_eq!(r2.status, "succeeded", "{}", transcript(&env, r2.id).await);
+    let t2 = transcript(&env, r2.id).await;
+    assert!(!t2.contains("resumed from a previous run"), "{t2}");
+    assert_eq!(r2.session_config.unwrap().0["model"], "small", "back to the adapter default");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resume_is_skipped_when_the_effective_mode_changes() {
+    let env = setup().await;
+    fake_agent(&env.app, "f-changes", "review_changes", "fake").await;
+    let i = new_issue(&env, "Needs changes", IssueState::Ready).await;
+
+    // First fix run pins an explicit session mode (the config map itself never changes).
+    fake_agent(&env.app, "f-fix-mode", "fix", "fake").await;
+    sqlx::query("UPDATE agent_definitions SET session_mode_id = 'default' WHERE slug = 'f-fix-mode'").execute(&env.app.db).await.unwrap();
+    let r1 = run(&env, i.number, Role::Fix, "f-fix-mode").await;
+    assert_eq!(r1.status, "succeeded", "{}", transcript(&env, r1.id).await);
+
+    run(&env, i.number, Role::Review, "f-changes").await;
+    assert_eq!(issue(&env, i.number).await.state, IssueState::ChangesRequested);
+
+    // The mode pin is cleared. The desired config map is unchanged (still empty), but the
+    // effective launch mode is not, so resuming the retained session must still be skipped.
+    sqlx::query("UPDATE agent_definitions SET session_mode_id = NULL WHERE slug = 'f-fix-mode'").execute(&env.app.db).await.unwrap();
+    let r2 = run(&env, i.number, Role::Fix, "f-fix-mode").await;
+    assert_eq!(r2.status, "succeeded", "{}", transcript(&env, r2.id).await);
+    let t2 = transcript(&env, r2.id).await;
+    assert!(!t2.contains("resumed from a previous run"), "{t2}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resume_is_skipped_for_a_pre_migration_run_with_no_snapshot() {
+    let env = setup().await;
+    fake_agent(&env.app, "f-changes", "review_changes", "fake").await;
+    fake_agent(&env.app, "f-fix", "fix", "fake").await;
+    let i = new_issue(&env, "Needs changes", IssueState::Ready).await;
+
+    let r1 = run(&env, i.number, Role::Fix, "f-fix").await;
+    assert_eq!(r1.status, "succeeded", "{}", transcript(&env, r1.id).await);
+    // Simulate a run recorded before the requested_session_config column existed (or a
+    // corrupt/unreadable snapshot): its compatibility with any later run's settings is unknown,
+    // not the same as "wants nothing", so it must never look compatible even when the later
+    // run's own desired settings are also empty.
+    sqlx::query("UPDATE agent_runs SET requested_session_config = NULL WHERE id = ?").bind(r1.id).execute(&env.app.db).await.unwrap();
+
+    run(&env, i.number, Role::Review, "f-changes").await;
+    assert_eq!(issue(&env, i.number).await.state, IssueState::ChangesRequested);
+
+    let r2 = run(&env, i.number, Role::Fix, "f-fix").await;
+    assert_eq!(r2.status, "succeeded", "{}", transcript(&env, r2.id).await);
+    let t2 = transcript(&env, r2.id).await;
+    assert!(!t2.contains("resumed from a previous run"), "{t2}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

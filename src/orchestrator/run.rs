@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot};
@@ -577,6 +578,27 @@ pub async fn desired_session_config(
     cfg
 }
 
+/// The session mode this run would launch with: the container override when running in a
+/// container, else the plain override, matching [`plan_launch`]'s choice exactly so a resume
+/// decision can be made before the launch plan itself is computed.
+pub fn desired_session_mode(project: Option<&Project>, agent: &AgentDefinition) -> Option<String> {
+    if project.is_some_and(|p| p.container_enabled) {
+        agent.container_session_mode_id.clone().or_else(|| agent.session_mode_id.clone())
+    } else {
+        agent.session_mode_id.clone()
+    }
+}
+
+/// The full set of launch settings a resumed session must still match: both the config overrides
+/// and the effective mode. Persisted verbatim so a later run can check compatibility without
+/// re-deriving it, and so an unparseable/legacy snapshot is unambiguously "unknown" rather than
+/// silently treated as an empty (and therefore falsely compatible) one.
+#[derive(Serialize, Deserialize, PartialEq)]
+struct SessionSnapshot {
+    config: std::collections::BTreeMap<String, Value>,
+    mode: Option<String>,
+}
+
 /// Option id → current value.
 pub fn effective_config(options: &Value) -> serde_json::Map<String, Value> {
     options
@@ -663,7 +685,7 @@ pub async fn plan_launch(
         return Ok(LaunchPlan {
             launch: acp::Launch { program: "docker".into(), args: c.args, env: vec![], cwd: cwd.to_path_buf() },
             container: Some(c.name),
-            mode: agent.container_session_mode_id.clone().or(agent.session_mode_id.clone()),
+            mode: desired_session_mode(Some(p), agent),
         });
     }
     let mut env: Vec<(String, String)> = agent.env.0.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -685,7 +707,7 @@ pub async fn plan_launch(
     Ok(LaunchPlan {
         launch: acp::Launch { program: agent.command.clone(), args: agent.args.0.clone(), env, cwd: cwd.to_path_buf() },
         container: None,
-        mode: agent.session_mode_id.clone(),
+        mode: desired_session_mode(project, agent),
     })
 }
 
@@ -804,6 +826,49 @@ async fn execute_inner(
             _ => None,
         };
 
+        // The settings this run wants (model/effort/mode overrides, and effective session mode).
+        // Persisted so a later run can check whether resuming this run's session would keep
+        // them, rather than silently reusing whatever the adapter still has set from this run.
+        let wanted_config = desired_session_config(app, &project, run.role, &agent).await;
+        let wanted_mode = desired_session_mode(Some(&project), &agent);
+        let wanted_snapshot = SessionSnapshot { config: wanted_config, mode: wanted_mode };
+        let wanted_snapshot_json = serde_json::to_string(&wanted_snapshot).unwrap_or_else(|_| "{}".into());
+        sqlx::query("UPDATE agent_runs SET requested_session_config = ? WHERE id = ?")
+            .bind(&wanted_snapshot_json)
+            .bind(run_id)
+            .execute(&app.db)
+            .await?;
+
+        // If a previous fix/merge-prep run by this same agent on this issue left a session
+        // behind, ask the adapter to reload it so the agent keeps its own conversation context
+        // (e.g. addressing review feedback on a fix it already reasoned about) instead of
+        // reconstructing everything from the prompt alone. `acp::drive` only does this when the
+        // agent advertises support and falls back to a new session otherwise or on failure. Only
+        // resume when this run wants the same settings the previous run did: an override or mode
+        // cleared or changed since then (e.g. a model/effort/mode pin removed) must not silently
+        // stick with the resumed session's still-active old value. A previous run whose snapshot
+        // is missing or fails to parse (pre-migration row, or corrupt) is unknown compatibility,
+        // not empty-and-therefore-compatible, so it never resumes.
+        let resume_session_id: Option<String> = if matches!(run.role, Role::Fix | Role::MergePrep) {
+            let candidate: Option<(String, Option<String>)> = sqlx::query_as(
+                "SELECT acp_session_id, requested_session_config FROM agent_runs
+                  WHERE issue_id = ? AND id < ? AND role IN ('fix', 'merge_prep')
+                    AND agent_definition_id = ? AND acp_session_id IS NOT NULL
+                  ORDER BY id DESC LIMIT 1",
+            )
+            .bind(issue_id)
+            .bind(run_id)
+            .bind(agent.id)
+            .fetch_optional(&app.db)
+            .await?;
+            candidate.and_then(|(sid, cfg)| {
+                let prev: SessionSnapshot = serde_json::from_str(cfg.as_deref().unwrap_or("")).ok()?;
+                (prev == wanted_snapshot).then_some(sid)
+            })
+        } else {
+            None
+        };
+
         // Per-run token.
         let token = format!("akr_{}", auth::random_token());
         sqlx::query("UPDATE agent_runs SET token_hash = ? WHERE id = ?")
@@ -840,7 +905,8 @@ async fn execute_inner(
         let mut extras = acp::SessionExtras {
             mcp: Some((format!("{base_url}/mcp"), token.clone())),
             additional_directories: vec![],
-            config: desired_session_config(app, &project, run.role, &agent).await.into_iter().collect(),
+            config: wanted_snapshot.config.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            resume_session_id,
         };
         if prep.kind == "branch"
             && let Ok(common) = git::common_dir(&project.repo_path).await
@@ -900,11 +966,12 @@ async fn execute_inner(
                         break Outcome::Failed(match err { Some(e) => format!("agent session ended: {e}"), None => format!("agent process exited unexpectedly {last}") });
                     };
                     match ev {
-                        Out::Initialized { agent_info, session_id, modes } => {
+                        Out::Initialized { agent_info, session_id, modes, resumed } => {
                             let _ = sqlx::query("UPDATE agent_runs SET acp_session_id = ?, agent_info = ? WHERE id = ?")
                                 .bind(&session_id).bind(agent_info.to_string()).bind(run_id).execute(&app.db).await;
                             set_status(app, run_id, "running").await;
-                            tr.insert("status", None, json!({"text": "session started", "agent": agent_info, "modes": modes})).await;
+                            let text = if resumed { "session resumed from a previous run" } else { "session started" };
+                            tr.insert("status", None, json!({"text": text, "agent": agent_info, "modes": modes})).await;
                             app.bus.run(Some(&project.slug), run_id);
                             app.bus.issue(&project.slug, issue.number);
                         }

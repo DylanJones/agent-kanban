@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, HttpHeader, Implementation, InitializeRequest, McpServer, McpServerHttp, NewSessionRequest, PermissionOption, PromptRequest,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification,
-    SetSessionConfigOptionRequest, SetSessionModeRequest, TextContent,
+    CancelNotification, ContentBlock, HttpHeader, Implementation, InitializeRequest, LoadSessionRequest, McpServer, McpServerHttp, NewSessionRequest,
+    PermissionOption, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
+    SessionId, SessionNotification, SetSessionConfigOptionRequest, SetSessionModeRequest, TextContent,
 };
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Responder};
 use serde::Serialize;
@@ -54,6 +54,9 @@ pub enum Out {
         agent_info: Value,
         session_id: String,
         modes: Value,
+        /// Whether this reloaded a previous run's session (`session/load`) instead of starting a
+        /// fresh one.
+        resumed: bool,
     },
     /// A `SessionNotification` serialized as JSON (camelCase ACP wire format).
     Update(Value),
@@ -77,6 +80,12 @@ pub struct SessionExtras {
     pub additional_directories: Vec<PathBuf>,
     /// Session config values to set (option id → value), e.g. `model`, `effort`/`reasoning_effort`.
     pub config: Vec<(String, Value)>,
+    /// A prior run's ACP session ID to reload with `session/load` instead of starting fresh, so
+    /// the agent keeps its own conversation context (e.g. addressing review feedback on a fix it
+    /// already made). Only used when the agent advertises `agentCapabilities.loadSession`; falls
+    /// back to a new session otherwise or if the reload fails (e.g. the adapter's own session
+    /// state didn't survive a container restart).
+    pub resume_session_id: Option<String>,
 }
 
 pub struct Launch {
@@ -216,23 +225,47 @@ pub async fn drive(
                 )
                 .block_task()
                 .await?;
-            let mut new_session = NewSessionRequest::new(cwd.clone()).additional_directories(session.additional_directories.clone());
-            if let Some((url, token)) = &session.mcp
+            let mcp_servers = if let Some((url, token)) = &session.mcp
                 && init.agent_capabilities.mcp_capabilities.http
             {
-                new_session = new_session.mcp_servers(vec![McpServer::Http(
+                vec![McpServer::Http(
                     McpServerHttp::new("agent-kanban", url.clone()).headers(vec![HttpHeader::new("Authorization", format!("Bearer {token}"))]),
-                )]);
-            }
-            let sess = cx.send_request(new_session).block_task().await?;
-            let sid = sess.session_id.clone();
+                )]
+            } else {
+                vec![]
+            };
+
+            let mut resumed = false;
+            let (sid, modes, config_options) = 'session: {
+                if let Some(prev_sid) = session.resume_session_id.clone()
+                    && init.agent_capabilities.load_session
+                {
+                    let load = LoadSessionRequest::new(prev_sid.clone(), cwd.clone())
+                        .additional_directories(session.additional_directories.clone())
+                        .mcp_servers(mcp_servers.clone());
+                    match cx.send_request(load).block_task().await {
+                        Ok(r) => {
+                            resumed = true;
+                            break 'session (SessionId::from(prev_sid), r.modes, r.config_options);
+                        }
+                        Err(e) => {
+                            let _ = out.send(Out::Stderr(format!("couldn't resume session {prev_sid}, starting a new one: {e}")));
+                        }
+                    }
+                }
+                let new_session =
+                    NewSessionRequest::new(cwd.clone()).additional_directories(session.additional_directories.clone()).mcp_servers(mcp_servers.clone());
+                let sess = cx.send_request(new_session).block_task().await?;
+                (sess.session_id, sess.modes, sess.config_options)
+            };
             let _ = out.send(Out::Initialized {
                 agent_info: serde_json::to_value(&init.agent_info).unwrap_or(Value::Null),
                 session_id: sid.0.to_string(),
-                modes: serde_json::to_value(&sess.modes).unwrap_or(Value::Null),
+                modes: serde_json::to_value(&modes).unwrap_or(Value::Null),
+                resumed,
             });
-            let mut options = serde_json::to_value(&sess.config_options).unwrap_or(Value::Null);
-            if let (Some(m), Some(modes)) = (&mode, &sess.modes)
+            let mut options = serde_json::to_value(&config_options).unwrap_or(Value::Null);
+            if let (Some(m), Some(modes)) = (&mode, &modes)
                 && modes.available_modes.iter().any(|am| am.id.0.as_ref() == m.as_str())
             {
                 cx.send_request(SetSessionModeRequest::new(sid.clone(), m.clone())).block_task().await?;

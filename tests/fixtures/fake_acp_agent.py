@@ -25,6 +25,18 @@ import urllib.request
 API = os.environ.get("AKB_API", "")
 AUTH = os.environ.get("AKB_AUTH", "")
 MODE = os.environ.get("FAKE_MODE", "noop")
+# ok: advertise and honor session/load. unsupported: don't advertise the capability at all.
+# fail: advertise it but reject every session/load (as if the adapter's own state was lost).
+LOAD_SESSION = os.environ.get("FAKE_LOAD_SESSION", "ok")
+# Tokens to report as used by this turn, added to a cumulative session total kept in
+# FAKE_USAGE_STATE (a file outside the worktree, since a real adapter's usage counter survives
+# across the separate processes each run spawns for the same resumed session).
+USAGE_STEP = int(os.environ.get("FAKE_USAGE_STEP", "0"))
+USAGE_STATE = os.environ.get("FAKE_USAGE_STATE", "")
+# Same idea as FAKE_USAGE_STEP/STATE, but for the Claude-style cumulative session cost reported
+# via a "usage_update" session/update (`cost.amount`), separate from the turn result's `usage`.
+COST_STEP = float(os.environ.get("FAKE_COST_STEP", "0"))
+COST_STATE = os.environ.get("FAKE_COST_STATE", "")
 cancelled = threading.Event()
 out_lock = threading.Lock()
 pending = {}  # request id -> [Event, response]
@@ -155,7 +167,26 @@ def handle_prompt(msg):
             behave(sid)
         except Exception as e:  # report and end the turn
             say(sid, f"error: {e}")
-    send({"jsonrpc": "2.0", "id": msg["id"], "result": {"stopReason": "end_turn"}})
+    if COST_STEP:
+        cost_cumulative = COST_STEP
+        if COST_STATE and os.path.exists(COST_STATE):
+            cost_cumulative += float(open(COST_STATE).read().strip() or 0)
+        if COST_STATE:
+            with open(COST_STATE, "w") as f:
+                f.write(str(cost_cumulative))
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {
+            "sessionUpdate": "usage_update", "used": 0, "size": 0, "cost": {"amount": cost_cumulative, "currency": "USD"},
+        }}})
+    result = {"stopReason": "end_turn"}
+    if USAGE_STEP:
+        cumulative = USAGE_STEP
+        if USAGE_STATE and os.path.exists(USAGE_STATE):
+            cumulative += int(open(USAGE_STATE).read().strip() or 0)
+        if USAGE_STATE:
+            with open(USAGE_STATE, "w") as f:
+                f.write(str(cumulative))
+        result["usage"] = {"inputTokens": cumulative, "outputTokens": 0, "totalTokens": cumulative}
+    send({"jsonrpc": "2.0", "id": msg["id"], "result": result})
 
 
 def main():
@@ -165,11 +196,16 @@ def main():
         msg = json.loads(line)
         m = msg.get("method")
         if m == "initialize":
-            send({"jsonrpc": "2.0", "id": msg["id"], "result": {"protocolVersion": 1, "agentCapabilities": {}, "authMethods": [], "agentInfo": {"name": "fake", "version": "0"}}})
+            send({"jsonrpc": "2.0", "id": msg["id"], "result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": LOAD_SESSION != "unsupported"}, "authMethods": [], "agentInfo": {"name": "fake", "version": "0"}}})
         elif m == "session/new":
             if MODE == "crash":
                 os._exit(3)
             send({"jsonrpc": "2.0", "id": msg["id"], "result": {"sessionId": "s1", "modes": {"currentModeId": "default", "availableModes": [{"id": "default", "name": "Default"}]}, "configOptions": CONFIG}})
+        elif m == "session/load":
+            if LOAD_SESSION == "fail":
+                send({"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32603, "message": "unknown session"}})
+            else:
+                send({"jsonrpc": "2.0", "id": msg["id"], "result": {"modes": {"currentModeId": "default", "availableModes": [{"id": "default", "name": "Default"}]}, "configOptions": CONFIG}})
         elif m == "session/set_config_option":
             for o in CONFIG:
                 if o["id"] == msg["params"]["configId"]:

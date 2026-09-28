@@ -75,8 +75,15 @@ pub async fn setup() -> Env {
 
 /// Register a fake agent with a scripted behaviour.
 pub async fn fake_agent(app: &AppState, slug: &str, mode: &str, group: &str) {
+    fake_agent_env(app, slug, mode, group, json!({})).await
+}
+
+/// Like [`fake_agent`], with extra environment variables merged in (e.g. `FAKE_LOAD_SESSION`).
+pub async fn fake_agent_env(app: &AppState, slug: &str, mode: &str, group: &str, extra_env: serde_json::Value) {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_acp_agent.py");
     let now = agent_kanban::db::now();
+    let mut env = extra_env;
+    env["FAKE_MODE"] = json!(mode);
     sqlx::query(
         "INSERT OR REPLACE INTO agent_definitions(slug, name, harness, command, args, env, limit_group, max_concurrent,
             permission_policy, enabled, needs_auth, created_at, updated_at)
@@ -85,7 +92,7 @@ pub async fn fake_agent(app: &AppState, slug: &str, mode: &str, group: &str) {
     .bind(slug)
     .bind(slug)
     .bind(json!([script]).to_string())
-    .bind(json!({"FAKE_MODE": mode}).to_string())
+    .bind(env.to_string())
     .bind(group)
     .bind(&now)
     .bind(&now)

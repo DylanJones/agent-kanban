@@ -38,6 +38,19 @@ impl Tokens {
         self.reasoning += o.reasoning;
         self.total += o.total;
     }
+
+    /// This run's own share of a session-cumulative total, given what earlier runs on the same
+    /// session already accounted for. Saturates at zero rather than going negative.
+    fn since(&self, baseline: &Tokens) -> Tokens {
+        Tokens {
+            input: (self.input - baseline.input).max(0),
+            cached_input: (self.cached_input - baseline.cached_input).max(0),
+            cache_write: (self.cache_write - baseline.cache_write).max(0),
+            output: (self.output - baseline.output).max(0),
+            reasoning: (self.reasoning - baseline.reasoning).max(0),
+            total: (self.total - baseline.total).max(0),
+        }
+    }
 }
 
 fn n(v: &Value, k: &str) -> i64 {
@@ -247,15 +260,96 @@ pub struct AcpReport {
     pub cost_usd: Option<f64>,
 }
 
+/// A prior run's contribution to a session's cumulative totals, per model: tokens and cost.
+#[derive(Debug, Clone, Default)]
+struct Baseline {
+    tokens: Tokens,
+    cost: f64,
+}
+
+/// What earlier runs sharing this run's ACP session already accounted for, per model. Codex and
+/// Claude session logs (and the ACP `usage`/cost fields) report totals cumulative for the whole
+/// session, not just the latest turn, so a resumed run must subtract what came before it or its
+/// own numbers double-count the runs it resumed from.
+async fn usage_baseline(app: &AppState, run_id: i64, session: &str) -> HashMap<String, Baseline> {
+    let rows: Vec<(String, i64, i64, i64, i64, i64, i64, Option<f64>)> = sqlx::query_as(
+        "SELECT u.model, u.input_tokens, u.cached_input_tokens, u.cache_write_tokens, u.output_tokens, u.reasoning_tokens, u.total_tokens, u.cost_usd
+           FROM run_usage u JOIN agent_runs r ON r.id = u.run_id
+          WHERE r.id < ? AND r.acp_session_id = ?",
+    )
+    .bind(run_id)
+    .bind(session)
+    .fetch_all(&app.db)
+    .await
+    .unwrap_or_default();
+    let mut out: HashMap<String, Baseline> = HashMap::new();
+    for (model, input, cached_input, cache_write, output, reasoning, total, cost) in rows {
+        let entry = out.entry(model).or_default();
+        entry.tokens.add(&Tokens { input, cached_input, cache_write, output, reasoning, total });
+        entry.cost += cost.unwrap_or(0.0);
+    }
+    out
+}
+
+fn cost_since(cost: Option<f64>, baseline: f64) -> Option<f64> {
+    cost.map(|c| (c - baseline).max(0.0))
+}
+
+/// Baseline across every model earlier runs recorded, for sources that report a single
+/// session-wide cumulative counter rather than a true per-model breakdown (Codex's
+/// `total_token_usage` and the ACP `usage`/cost fields both work this way: one number for the
+/// whole session, labelled with whatever model happened to be known at the time). The model label
+/// on an earlier run's row can differ from this run's — e.g. an ACP fallback run with no model
+/// metadata stores its usage under the agent slug, then a later run's Codex log supplies the real
+/// model name — so matching on model would miss it and double-count. Only `claude_log` reports
+/// genuinely separate per-model totals (Claude sub-agents can use different real models within one
+/// session), so it keeps a strict per-model baseline instead of using this.
+fn total_baseline(baseline: &HashMap<String, Baseline>) -> Baseline {
+    let mut out = Baseline::default();
+    for b in baseline.values() {
+        out.tokens.add(&b.tokens);
+        out.cost += b.cost;
+    }
+    out
+}
+
+/// Build per-model usage rows for a `claude_log` run, given what earlier runs sharing the
+/// session already accounted for. Token totals are genuinely per-model (Claude sub-agents can use
+/// different real models within one session), so each model's baseline is subtracted from its own
+/// prior total. The reported cost, however, is one session-wide cumulative number like Codex's and
+/// ACP's, not a per-model breakdown, so its baseline must sum every model earlier runs recorded —
+/// matching it to only the current run's largest-token model would miss cost recorded against a
+/// *different* model in an earlier run (e.g. the largest contributor changed between runs). The
+/// resulting delta is attached to this run's largest-token model, same as where the adapter's
+/// report is stored.
+fn claude_log_rows(models: HashMap<String, Tokens>, baseline: &HashMap<String, Baseline>, acp_cost: Option<f64>) -> Vec<(String, Tokens, Option<f64>)> {
+    let base = |model: &str| baseline.get(model).cloned().unwrap_or_default();
+    let main = models.iter().max_by_key(|(_, t)| t.total).map(|(m, _)| m.clone());
+    let cost = main.as_ref().and_then(|_| cost_since(acp_cost, total_baseline(baseline).cost));
+    models
+        .into_iter()
+        .map(|(m, t)| {
+            let tokens = t.since(&base(&m).tokens);
+            let c = if Some(&m) == main.as_ref() { cost } else { None };
+            (m, tokens, c)
+        })
+        .collect()
+}
+
 /// Recompute a run's usage from the best available source. Returns false if nothing was found.
 pub async fn refresh_run(app: &AppState, run_id: i64, acp: Option<&AcpReport>) -> bool {
     let Some(info) = run_info(app, run_id).await else { return false };
+    let baseline = match &info.session {
+        Some(session) => usage_baseline(app, run_id, session).await,
+        None => HashMap::new(),
+    };
     if let Some(session) = info.session.clone() {
         if info.harness == "codex"
             && let Some(log) = codex_log(&session, &codex_dirs(app))
         {
             let model = log.model.unwrap_or_else(|| "codex".into());
-            store(app, run_id, &info, &[(model, log.tokens, None)], "codex_log").await;
+            let tokens = log.tokens.since(&total_baseline(&baseline).tokens);
+            store(app, run_id, &info, &[(model, tokens, None)], "codex_log").await;
             if let Some(rl) = log.rate_limits {
                 crate::orchestrator::limits::record_snapshot(app, &info.limit_group, &rl).await;
             }
@@ -265,13 +359,7 @@ pub async fn refresh_run(app: &AppState, run_id: i64, acp: Option<&AcpReport>) -
             && !info.container
             && let Some(models) = claude_log(&session)
         {
-            // Attach the reported session cost to the main (largest) model.
-            let main = models.iter().max_by_key(|(_, t)| t.total).map(|(m, _)| m.clone());
-            let cost = acp.and_then(|a| a.cost_usd);
-            let rows: Vec<_> = models.into_iter().map(|(m, t)| {
-                let c = if Some(&m) == main.as_ref() { cost } else { None };
-                (m, t, c)
-            }).collect();
+            let rows = claude_log_rows(models, &baseline, acp.and_then(|a| a.cost_usd));
             store(app, run_id, &info, &rows, "claude_log").await;
             return true;
         }
@@ -280,18 +368,28 @@ pub async fn refresh_run(app: &AppState, run_id: i64, acp: Option<&AcpReport>) -
         && let Some(u) = &a.usage
     {
         let model = a.model.clone().unwrap_or_else(|| info.agent.clone());
-        store(app, run_id, &info, &[(model, from_acp(u), a.cost_usd)], "acp").await;
+        let b = total_baseline(&baseline);
+        let tokens = from_acp(u).since(&b.tokens);
+        let cost = cost_since(a.cost_usd, b.cost);
+        store(app, run_id, &info, &[(model, tokens, cost)], "acp").await;
         return true;
     }
     false
 }
 
-/// Fill in usage for runs that finished before usage tracking existed (or whose logs appeared later).
+/// Fill in usage for runs that finished before usage tracking existed (or whose logs appeared
+/// later). Session logs and the ACP `usage`/cost fields are cumulative for the whole session, so
+/// re-reading one for anything but the session's most recent run would mix in tokens/cost from
+/// runs that happened after it, corrupting an already-settled boundary (e.g. overwriting an
+/// earlier run's own total with the full session's later cumulative total). Only the latest run
+/// in each session is ever (re)computed from a log; earlier runs keep whatever total they were
+/// given when they themselves were the latest, and are never revisited.
 pub async fn backfill(app: &AppState) {
     let ids: Vec<i64> = sqlx::query_scalar(
         "SELECT r.id FROM agent_runs r WHERE r.acp_session_id IS NOT NULL
             AND r.status NOT IN ('queued','preparing','running')
-            AND NOT EXISTS (SELECT 1 FROM run_usage u WHERE u.run_id = r.id AND u.source != 'acp')",
+            AND NOT EXISTS (SELECT 1 FROM run_usage u WHERE u.run_id = r.id AND u.source != 'acp')
+            AND NOT EXISTS (SELECT 1 FROM agent_runs r2 WHERE r2.acp_session_id = r.acp_session_id AND r2.id > r.id)",
     )
     .fetch_all(&app.db)
     .await
@@ -338,5 +436,27 @@ mod tests {
         let t = from_acp(&serde_json::json!({"inputTokens": 5, "cachedReadTokens": 50, "cachedWriteTokens": 7, "outputTokens": 3, "totalTokens": 65}));
         assert_eq!(t.total, 65);
         assert_eq!(t.cached_input, 50);
+    }
+
+    #[test]
+    fn claude_log_cost_baseline_survives_a_largest_model_change() {
+        // Run 1: model-a=100 tokens (the run's largest), model-b=50 tokens, cumulative cost $1.00
+        // (stored entirely against model-a, the largest model at the time).
+        let mut baseline: HashMap<String, Baseline> = HashMap::new();
+        baseline.insert("model-a".into(), Baseline { tokens: Tokens { total: 100, ..Default::default() }, cost: 1.00 });
+        baseline.insert("model-b".into(), Baseline { tokens: Tokens { total: 50, ..Default::default() }, cost: 0.0 });
+
+        // Run 2: model-a is untouched, model-b gains 150 tokens and becomes the new largest
+        // model (200 > 100); cumulative session cost is now $1.50.
+        let mut models: HashMap<String, Tokens> = HashMap::new();
+        models.insert("model-a".into(), Tokens { total: 100, ..Default::default() });
+        models.insert("model-b".into(), Tokens { total: 200, ..Default::default() });
+
+        let rows = claude_log_rows(models, &baseline, Some(1.50));
+        let cost = |model: &str| rows.iter().find(|(m, _, _)| m == model).unwrap().2;
+        // The $1.00 already recorded against model-a in run 1 must still be subtracted, even
+        // though run 2's cost is now attached to model-b instead.
+        assert!((cost("model-b").unwrap() - 0.50).abs() < 1e-9, "{:?}", cost("model-b"));
+        assert_eq!(cost("model-a"), None, "cost is only attached to this run's largest model");
     }
 }
