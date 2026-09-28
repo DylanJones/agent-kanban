@@ -9,7 +9,7 @@ import { type PullDetail, type Thread, api, client, unwrap } from "../api/client
 import { Button, ErrorBox, Markdown, Pill, TimeAgo, fieldCls, inputCls, short } from "../components/ui";
 import { CommentView } from "./IssueDrawer";
 
-function ThreadView({ t, compact }: { t: Thread; slug?: string; compact?: boolean }) {
+export function ThreadView({ t, compact }: { t: Thread; slug?: string; compact?: boolean }) {
   const qc = useQueryClient();
   const [reply, setReply] = useState("");
   const [open, setOpen] = useState(!t.resolved);
@@ -23,17 +23,17 @@ function ThreadView({ t, compact }: { t: Thread; slug?: string; compact?: boolea
   });
   return (
     <div className={clsx("m-2 rounded-md border bg-white dark:bg-zinc-900 font-sans text-sm", t.resolved ? "border-zinc-200 dark:border-zinc-800" : t.severity === "blocking" ? "border-amber-300 dark:border-amber-800" : "border-zinc-300 dark:border-zinc-700")}>
-      <button className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-zinc-500" onClick={() => setOpen(!open)}>
-        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+      <button className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-zinc-500 text-left" onClick={() => setOpen(!open)}>
+        {open ? <ChevronDown size={12} className="shrink-0" /> : <ChevronRight size={12} className="shrink-0" />}
         {compact && (
-          <code className="text-zinc-700 dark:text-zinc-300">
+          <code className="min-w-0 shrink truncate text-zinc-700 dark:text-zinc-300">
             {t.path}:{t.line}
           </code>
         )}
-        <Pill className={t.severity === "blocking" ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800"}>{t.severity}</Pill>
-        {t.resolved && <Pill className="bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">resolved</Pill>}
-        {t.outdated && <Pill className="bg-zinc-200 text-zinc-600 dark:bg-zinc-800">outdated</Pill>}
-        <span className="truncate">{t.comments[0]?.body.slice(0, 90)}</span>
+        <Pill className={clsx("shrink-0", t.severity === "blocking" ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800")}>{t.severity}</Pill>
+        {t.resolved && <Pill className="shrink-0 bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">resolved</Pill>}
+        {t.outdated && <Pill className="shrink-0 bg-zinc-200 text-zinc-600 dark:bg-zinc-800">outdated</Pill>}
+        <span className="min-w-0 flex-1 truncate">{t.comments[0]?.body.slice(0, 90)}</span>
       </button>
       {open && (
         <div className="border-t border-zinc-100 dark:border-zinc-800 px-3 py-2 space-y-2">
@@ -143,9 +143,9 @@ function FileView({ file, threads, slug, n, readOnly }: { file: FileData; thread
     <div className="rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden">
       <button className="flex w-full items-center gap-2 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 px-3 py-2 text-sm" onClick={() => setCollapsed(!collapsed)}>
         {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-        <FileCode size={14} className="text-zinc-500" />
-        <span className="font-mono text-xs">{file.type === "rename" ? `${file.oldPath} → ${file.newPath}` : path}</span>
-        {count > 0 && <Pill className="bg-amber-100 text-amber-800">{count} open</Pill>}
+        <FileCode size={14} className="text-zinc-500 shrink-0" />
+        <span className="font-mono text-xs min-w-0 truncate">{file.type === "rename" ? `${file.oldPath} → ${file.newPath}` : path}</span>
+        {count > 0 && <Pill className="bg-amber-100 text-amber-800 shrink-0">{count} open</Pill>}
       </button>
       {!collapsed && (
         <Diff
@@ -185,7 +185,7 @@ function FilesTab({ pr, slug }: { pr: PullDetail; slug: string }) {
   const orphan = pr.threads.filter((t) => !t.outdated && !files.some((f) => (f.type === "delete" ? f.oldPath : f.newPath) === t.path));
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-3 text-sm text-zinc-600 dark:text-zinc-400">
+      <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-600 dark:text-zinc-400">
         <span>
           {files.length} files · <code>{short(diff.data?.from)}</code>..<code>{short(diff.data?.head)}</code>
         </span>
@@ -262,14 +262,14 @@ function MergeBox({ pr, slug }: { pr: PullDetail; slug: string }) {
           {m.data?.mergeable ? "Ready to merge" : "Not ready to merge"}
         </div>
         {m.data && m.data.blockers.length > 0 && (
-          <ul className="text-xs text-zinc-600 dark:text-zinc-400 list-disc pl-5">
+          <ul className="text-xs text-zinc-600 dark:text-zinc-400 list-disc pl-5 break-words">
             {m.data.blockers.map((b) => (
               <li key={b}>{b}</li>
             ))}
           </ul>
         )}
-        <div className="flex items-center gap-2">
-          <select className={clsx(fieldCls, " py-1")} value={strat} onChange={(e) => setStrategy(e.target.value)}>
+        <div className="flex flex-wrap items-center gap-2">
+          <select className={clsx(fieldCls, "py-1 min-w-0")} value={strat} onChange={(e) => setStrategy(e.target.value)}>
             <option value="squash">Squash</option>
             <option value="merge">Merge commit</option>
             <option value="rebase">Rebase</option>
@@ -281,10 +281,10 @@ function MergeBox({ pr, slug }: { pr: PullDetail; slug: string }) {
         {strat !== "rebase" && (
           <textarea className={clsx(inputCls, "font-mono text-xs h-20", !msgOk && "ring-2 ring-rose-400")} value={message} onChange={(e) => setMessage(e.target.value)} />
         )}
-        {!msgOk && <div className="text-xs text-rose-600">First line must match {regex}</div>}
-        <div className="flex gap-2">
+        {!msgOk && <div className="text-xs text-rose-600 break-words">First line must match {regex}</div>}
+        <div className="flex flex-wrap gap-2">
           <Button variant="success" disabled={merge.isPending || m.data?.has_conflicts || (!m.data?.mergeable && !force) || !msgOk} onClick={() => merge.mutate()}>
-            <GitMerge size={14} /> Merge into {pr.base_branch}
+            <GitMerge size={14} /> Merge into <span className="whitespace-normal break-all">{pr.base_branch}</span>
           </Button>
           <Button variant="ghost" onClick={() => confirm("Close this PR without merging?") && close.mutate()}>
             Close PR
@@ -295,7 +295,7 @@ function MergeBox({ pr, slug }: { pr: PullDetail; slug: string }) {
       <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-3 space-y-2">
         <div className="text-sm font-medium">Your review at {short(pr.head_sha)}</div>
         <textarea className={clsx(inputCls, "h-16 text-sm")} placeholder="Summary (markdown)" value={verdictBody} onChange={(e) => setVerdictBody(e.target.value)} />
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="success" onClick={() => review.mutate("approve")}>
             Approve
           </Button>
@@ -394,7 +394,7 @@ export default function PullPage() {
         </h1>
         <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
           <Pill className={d.state === "open" ? "bg-emerald-100 text-emerald-800" : d.state === "merged" ? "bg-violet-100 text-violet-800" : "bg-zinc-200 text-zinc-700"}>{d.state}</Pill>
-          <code className="text-xs">{d.branch}</code> → <code className="text-xs">{d.base_branch}</code>
+          <code className="text-xs break-all">{d.branch}</code> → <code className="text-xs break-all">{d.base_branch}</code>
           <span>
             head <code className="text-xs">{short(d.head_sha)}</code>
           </span>
@@ -424,13 +424,13 @@ export default function PullPage() {
           </button>
         ))}
       </div>
-      <div className="grid grid-cols-[1fr_320px] gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_320px] gap-6">
         <div className="min-w-0">
           {tab === "conversation" && <Conversation pr={d} slug={slug} />}
           {tab === "files" && <FilesTab pr={d} slug={slug} />}
           {tab === "commits" && <Commits pr={d} slug={slug} />}
         </div>
-        <div>
+        <div className="min-w-0">
           <MergeBox key={d.head_sha ?? ""} pr={d} slug={slug} />
         </div>
       </div>

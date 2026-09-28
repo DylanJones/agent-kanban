@@ -122,7 +122,7 @@ export function TimeAgo({ iso }: { iso?: string | null }) {
 export function ErrorBox({ error }: { error: unknown }) {
   if (!error) return null;
   return (
-    <div className="rounded-md border border-rose-300 bg-rose-50 dark:bg-rose-950/40 dark:border-rose-900 px-3 py-2 text-sm text-rose-800 dark:text-rose-300">
+    <div className="rounded-md border border-rose-300 bg-rose-50 dark:bg-rose-950/40 dark:border-rose-900 px-3 py-2 text-sm text-rose-800 dark:text-rose-300 break-words">
       {error instanceof Error ? error.message : String(error)}
     </div>
   );
