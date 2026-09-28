@@ -333,7 +333,7 @@ function DispatchBanner({ board, spotlight, setSpotlight, onOpen }: { board: Non
         </button>
       ))}
       {queued.length > 8 && <span className="text-xs text-zinc-500">+{queued.length - 8} more</span>}
-      <label className="ml-auto flex items-center gap-1 text-xs text-zinc-500">
+      <label className="flex items-center gap-1 text-xs text-zinc-500 md:ml-auto">
         <input type="checkbox" checked={spotlight} onChange={(e) => setSpotlight(e.target.checked)} /> highlight
       </label>
     </div>
