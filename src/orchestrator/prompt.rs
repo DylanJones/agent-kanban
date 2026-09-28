@@ -66,8 +66,11 @@ Decide whether this report is valid, new, and actionable, and record a triage ou
      the `parent` of this issue and the related open ones. Mention the related issues in your triage comment so the
      fix agent can fix them together or avoid conflicting changes.
 2. Investigate the code in your worktree (`{{ worktree }}`, detached at `{{ project.base_branch }}`). Reproduce it if
-   that's cheap (the build directory is configured). Do **not** change code or commit.
-3. Post one triage comment: whether you reproduced it, the likely root cause (file:line), a suggested approach,
+   that's cheap (the build directory is configured). For a visual bug report, reproduce with a screenshot when a
+   headless browser is available (see the project instructions for how to run and screenshot this project); attach
+   it to your triage comment. If no browser is available, say so rather than skipping silently. Do **not** change
+   code or commit.
+3. Post one triage comment: whether you reproduced it (attach the screenshot if you took one), the likely root cause (file:line), a suggested approach,
    related issues, and risks.
 4. Set fields: `board_update_issue` with `priority` (P0/P1/P2), `size` (XS..XL), `add_labels` (e.g. `bug`).
 5. Move the issue — exactly one of:
@@ -113,11 +116,12 @@ Your worktree is `{{ worktree }}` on branch `{{ branch }}` (based on `{{ project
 1. {% if pr %}Address the review feedback above{% else %}Understand the problem and find the root cause{% endif %}. Prefer adding a regression test that fails before your change.
 2. Implement the fix. Keep the change focused on this issue.
 3. Build and run the relevant tests. Record the commands and results.
-4. Commit on `{{ branch }}`.{% if project.commit_convention %} Commit messages must match `{{ project.commit_convention }}`{% if "Emoji" in project.commit_convention or "emoji" in project.commit_convention %} (start with an emoji, e.g. `🦁 Fix sorting edge cases`){% endif %}.{% endif %} Do not push.
-{% if pr %}5. Reply to each thread you addressed: `POST $AKB_API/threads/<id>/replies` `{"body": "Fixed in <sha>: ..."}` (the reviewer resolves them).
-6. Move the issue to review: `POST …/issues/{{ issue.number }}/transition` `{"to": "in_review", "comment": "<what changed, test results>"}`.
-{% else %}5. Open a PR: `POST $AKB_API/projects/{{ project.slug }}/pulls` `{"title": "<commit-convention title>", "body": "<summary, test commands + results, dependencies>"}`.
-6. Move the issue to review: `POST …/issues/{{ issue.number }}/transition` `{"to": "in_review"}`.
+4. If the change affects what users see, show it: attach screenshots of the result to the PR{% if pr %} (a comment, or your thread replies){% else %} description{% endif %} — phone and desktop width where layout matters, dark mode where colours matter — and say what each image shows. When it's cheap, also include a "before" image taken from `{{ project.base_branch }}`. Only do this when a headless browser is available in this environment (see the project instructions below for how); otherwise say so rather than skipping silently.
+5. Commit on `{{ branch }}`.{% if project.commit_convention %} Commit messages must match `{{ project.commit_convention }}`{% if "Emoji" in project.commit_convention or "emoji" in project.commit_convention %} (start with an emoji, e.g. `🦁 Fix sorting edge cases`){% endif %}.{% endif %} Do not push.
+{% if pr %}6. Reply to each thread you addressed: `POST $AKB_API/threads/<id>/replies` `{"body": "Fixed in <sha>: ..."}` (the reviewer resolves them).
+7. Move the issue to review: `POST …/issues/{{ issue.number }}/transition` `{"to": "in_review", "comment": "<what changed, test results>"}`.
+{% else %}6. Open a PR: `POST $AKB_API/projects/{{ project.slug }}/pulls` `{"title": "<commit-convention title>", "body": "<summary, test commands + results, dependencies, screenshots>"}`.
+7. Move the issue to review: `POST …/issues/{{ issue.number }}/transition` `{"to": "in_review"}`.
 {% endif %}
 If you discover the fix needs a real design/language decision that isn't answered above, post a decision request and stop. If you find unrelated bugs along the way, file them (one curl, below) and keep going.
 
@@ -153,9 +157,10 @@ Your worktree `{{ worktree }}` is a detached checkout of the PR head. Read the c
 
 1. Get the diff: `GET $AKB_API/projects/{{ project.slug }}/pulls/{{ pr.number }}/diff`.
 2. Check correctness, edge cases, tests (are there regression tests? do they pass?), clarity, and the project's conventions{% if project.commit_convention %} (commit messages must match `{{ project.commit_convention }}`){% endif %}.
-3. Leave inline comments on specific lines: `POST …/pulls/{{ pr.number }}/threads` `{"path", "line", "side": "RIGHT", "severity": "blocking|nit", "body"}`. Be concrete and actionable.
-4. For earlier threads: verify each fix, then resolve it (`POST $AKB_API/threads/<id>/resolve`), or reply explaining what's still wrong.
-5. Record **exactly one** verdict for head `{{ pr.head_sha }}`: `POST …/pulls/{{ pr.number }}/reviews` `{"verdict": "approve|changes_requested|needs_decision", "commit_sha": "{{ pr.head_sha }}", "body": "<summary>"}`.
+3. If this is a visual fix, check the screenshots in the PR against the issue: do they show the claimed result, at the right widths and colour scheme? If a headless browser is available in this environment, you can take your own screenshots to confirm rather than trusting the PR's alone. A visual fix with no screenshots and no noted reason for skipping them is a blocking problem — request changes.
+4. Leave inline comments on specific lines: `POST …/pulls/{{ pr.number }}/threads` `{"path", "line", "side": "RIGHT", "severity": "blocking|nit", "body"}`. Be concrete and actionable.
+5. For earlier threads: verify each fix, then resolve it (`POST $AKB_API/threads/<id>/resolve`), or reply explaining what's still wrong.
+6. Record **exactly one** verdict for head `{{ pr.head_sha }}`: `POST …/pulls/{{ pr.number }}/reviews` `{"verdict": "approve|changes_requested|needs_decision", "commit_sha": "{{ pr.head_sha }}", "body": "<summary>"}`.
    - `approve` only if no blocking problems remain, tests pass, and dependencies are resolved.
    - `needs_decision` only for genuine language/design questions not already decided in the thread; include the question, options and consequences.
 

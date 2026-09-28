@@ -56,6 +56,28 @@ curl -sS -X POST "$AKB_API/projects/$P/attachments" "${H[@]}" -H 'Content-Type: 
 
 Response: `{"url": "...", "markdown": "![](...)", ...}`. Include the `markdown` in a comment or PATCH body — uploading alone doesn't post it anywhere. The board MCP tool `board_attach_image` does the same thing with a base64-encoded payload.
 
+## Screenshot a UI change
+
+For fixes and triage that affect what users see, a screenshot lets the reviewer and the human
+merging see the result without checking out the branch. Only do this when a headless browser is
+installed in your environment (check the project instructions); if there isn't one, say so instead
+of skipping silently.
+
+1. Start a throwaway instance of the app, isolated from anything else running, on a port that
+   isn't the one you're testing against changes for (the project instructions say how — e.g. a
+   temp data directory and an alternate `--bind` port).
+2. Capture the page with your headless browser, at the widths and colour schemes that matter (e.g.
+   phone width, desktop width, dark mode). The project instructions give the exact command for this
+   project (e.g. `playwright screenshot --viewport-size=375,812 --color-scheme=dark URL out.png`).
+3. Upload it and paste the returned markdown into your PR description, comment, or reply:
+   ```sh
+   curl -sS -X POST "$AKB_API/projects/$P/attachments" "${H[@]}" -H 'Content-Type: image/png' --data-binary @out.png
+   ```
+4. Stop the throwaway instance.
+
+Say what each image shows (e.g. "phone width, dark mode, after the fix"). When it's cheap, also
+capture a "before" image from the base branch for comparison.
+
 ## Move your issue
 
 ```sh

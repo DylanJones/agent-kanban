@@ -1,7 +1,18 @@
 import clsx from "clsx";
 import { X } from "lucide-react";
-import { type ButtonHTMLAttributes, type ReactNode, useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import {
+  type ButtonHTMLAttributes,
+  type ComponentProps,
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { HOLD_LABEL, type Hold, type IssueState, STATE_LABEL } from "../api/client";
 
@@ -83,10 +94,128 @@ export function LabelChip({ name, color }: { name: string; color: string }) {
   );
 }
 
+// Images nested inside a markdown link (`[![alt](img)](url)`) should stay
+// non-interactive so the enclosing link remains the single keyboard target.
+const InsideLinkContext = createContext(false);
+
+// A stable component identity, so react-markdown doesn't remount every <a>
+// (and any focused <img> inside it) each time Markdown re-renders.
+const LinkedImage: Components["a"] = ({ href, title, children }) => (
+  <a href={href} title={title}>
+    <InsideLinkContext.Provider value={true}>{children}</InsideLinkContext.Provider>
+  </a>
+);
+
 export function Markdown({ children, className }: { children: string; className?: string }) {
+  const [zoomed, setZoomed] = useState<{ src: string; alt: string } | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const previouslyFocused = useRef<HTMLElement | null>(null);
+  const openZoomed = useCallback((src: string, alt: string) => setZoomed({ src, alt }), []);
+
+  useEffect(() => {
+    if (!zoomed) return;
+    previouslyFocused.current = document.activeElement as HTMLElement | null;
+    closeButtonRef.current?.focus();
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setZoomed(null);
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+      if (!focusable || focusable.length === 0) return;
+      const list = Array.from(focusable);
+      const first = list[0];
+      const last = list[list.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      previouslyFocused.current?.focus();
+    };
+  }, [zoomed]);
+
+  const ZoomableImage = useCallback(
+    ({ src, alt }: ComponentProps<"img"> & ExtraProps) => {
+      // eslint-disable-next-line react-hooks/rules-of-hooks
+      const insideLink = useContext(InsideLinkContext);
+      if (typeof src !== "string") return null;
+      if (insideLink) return <img src={src} alt={alt ?? ""} />;
+      return (
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
+        <img
+          src={src}
+          alt={alt ?? ""}
+          role="button"
+          tabIndex={0}
+          className="cursor-zoom-in"
+          onClick={() => openZoomed(src, alt ?? "")}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter" && e.key !== " ") return;
+            e.preventDefault();
+            openZoomed(src, alt ?? "");
+          }}
+        />
+      );
+    },
+    [openZoomed],
+  );
+
+  const components = useMemo<Components>(() => ({ a: LinkedImage, img: ZoomableImage }), [ZoomableImage]);
+
   return (
     <div className={clsx("prose-sm break-words", className)}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{children}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        {children}
+      </ReactMarkdown>
+      {zoomed && (
+        <div
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label={zoomed.alt || "Full size image"}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setZoomed(null)}
+        >
+          <img
+            src={zoomed.src}
+            alt={zoomed.alt}
+            className="max-h-[calc(100%_-_2.5rem)] max-w-full rounded-md object-contain cursor-zoom-out"
+          />
+          <div className="absolute top-3 right-3 flex items-center gap-3">
+            <a
+              href={zoomed.src}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="text-sm text-zinc-100 underline hover:text-white"
+            >
+              Open original
+            </a>
+            <button
+              ref={closeButtonRef}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setZoomed(null);
+              }}
+              aria-label="Close"
+              className="rounded-md p-1 text-zinc-100 hover:bg-white/10 hover:text-white"
+            >
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
