@@ -61,8 +61,8 @@ function DecisionPanel({ issue, slug }: { issue: IssueDetail; slug: string }) {
       <div className="text-sm font-semibold">❓ A decision is needed</div>
       {req ? <Markdown>{req.body}</Markdown> : <div className="text-sm">{issue.hold_reason}</div>}
       <textarea className={clsx(inputCls, "h-24")} placeholder="Your decision (agents will treat this as settled)…" value={answer} onChange={(e) => setAnswer(e.target.value)} />
-      <div className="flex items-center gap-2">
-        <select className={clsx(fieldCls, "")} value={resume} onChange={(e) => setResume(e.target.value)}>
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+        <select className={clsx(fieldCls, "min-w-0 flex-1")} value={resume} onChange={(e) => setResume(e.target.value)}>
           <option value="">Stay in {STATE_LABEL[issue.state]}</option>
           {(["ready", "in_progress", "changes_requested", "in_review", "backlog"] as IssueState[])
             .filter((s) => s !== issue.state)
@@ -72,7 +72,7 @@ function DecisionPanel({ issue, slug }: { issue: IssueDetail; slug: string }) {
               </option>
             ))}
         </select>
-        <Button variant="primary" disabled={!answer.trim() || m.isPending} onClick={() => m.mutate()}>
+        <Button variant="primary" className="sm:w-auto" disabled={!answer.trim() || m.isPending} onClick={() => m.mutate()}>
           Record decision
         </Button>
       </div>
@@ -265,7 +265,7 @@ export function IssueBody({ issue, slug }: { issue: IssueDetail; slug: string })
   ].sort((a, b) => a.t.localeCompare(b.t));
 
   return (
-    <div className="grid grid-cols-[1fr_220px] gap-6">
+    <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] gap-6">
       <div className="space-y-4 min-w-0">
         {editing ? (
           <div className="space-y-2">
