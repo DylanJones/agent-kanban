@@ -360,3 +360,35 @@ async fn attachment_upload_and_download() {
     assert_eq!(body, png);
     assert_eq!(headers.get("content-type").unwrap(), "image/png");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_builtin_agent_runs_an_executable_the_container_overlay_installs() {
+    let env = setup().await;
+    for slug in ["claude", "codex", "opencode"] {
+        let a = agent(&env, slug).await;
+        let cmd = agent_kanban::container::container_command(&a);
+        assert!(agent_kanban::container::OVERLAY_EXECUTABLES.contains(&cmd[0].as_str()), "{slug} runs {cmd:?} in containers, which the overlay does not install");
+    }
+}
+
+#[test]
+fn opencode_credentials_and_config_are_mounted_only_when_present() {
+    use agent_kanban::container::opencode_mounts;
+    let tmp = tempfile::tempdir().unwrap();
+    let (data, config) = (tmp.path().join("share"), tmp.path().join("config"));
+    assert!(opencode_mounts(&data, &config).is_empty(), "absent paths must not be mounted (Docker would create them as root)");
+
+    std::fs::create_dir_all(data.join("opencode")).unwrap();
+    assert!(opencode_mounts(&data, &config).is_empty(), "a data dir without auth.json has nothing to share");
+    std::fs::write(data.join("opencode/auth.json"), "{}").unwrap();
+    std::fs::create_dir_all(config.join("opencode")).unwrap();
+    assert_eq!(
+        opencode_mounts(&data, &config),
+        [
+            "-v".to_string(),
+            format!("{}:/home/agent/.local/share/opencode/auth.json", data.join("opencode/auth.json").display()),
+            "-v".to_string(),
+            format!("{}:/home/agent/.config/opencode:ro", config.join("opencode").display()),
+        ]
+    );
+}

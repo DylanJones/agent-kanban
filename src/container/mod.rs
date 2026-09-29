@@ -20,15 +20,20 @@ USER root
 COPY --from=node:24-slim /usr/local /usr/local
 RUN (command -v apt-get >/dev/null && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git curl ca-certificates ccache bash && rm -rf /var/lib/apt/lists/*) \
  || (command -v apk >/dev/null && apk add --no-cache git curl ca-certificates ccache bash) || true
-RUN npm install -g @agentclientprotocol/claude-agent-acp @agentclientprotocol/codex-acp && npm cache clean --force \
- && npm ls -g --depth=0 @agentclientprotocol/claude-agent-acp @agentclientprotocol/codex-acp
+RUN npm install -g @agentclientprotocol/claude-agent-acp @agentclientprotocol/codex-acp opencode-ai && npm cache clean --force \
+ && npm ls -g --depth=0 @agentclientprotocol/claude-agent-acp @agentclientprotocol/codex-acp opencode-ai \
+ && for c in {{EXECUTABLES}}; do command -v "$c" || exit 1; done && opencode --version
 RUN (getent passwd {{UID}} >/dev/null && userdel -f $(getent passwd {{UID}} | cut -d: -f1) || true) \
  && (getent group {{GID}} >/dev/null || groupadd -g {{GID}} agent) \
  && useradd -m -u {{UID}} -g {{GID}} -s /bin/bash agent \
- && mkdir -p /home/agent/.ccache /home/agent/.codex && chown -R {{UID}}:{{GID}} /home/agent
+ && mkdir -p /home/agent/.ccache /home/agent/.codex /home/agent/.config/opencode /home/agent/.local/share/opencode && chown -R {{UID}}:{{GID}} /home/agent
 ENV IS_SANDBOX=1 CCACHE_DIR=/home/agent/.ccache HOME=/home/agent
 USER agent
 "#;
+
+/// Executables the overlay installs and checks for on PATH; every built-in agent's container
+/// command must be one of them.
+pub const OVERLAY_EXECUTABLES: &[&str] = &["claude-agent-acp", "codex-acp", "opencode"];
 
 const DEFAULT_BASE: &str = "FROM debian:bookworm-slim\nRUN apt-get update && apt-get install -y --no-install-recommends build-essential python3 && rm -rf /var/lib/apt/lists/*\n";
 
@@ -96,7 +101,7 @@ async fn build(tag: &str, dockerfile: &str, context: &Path, no_cache: bool, log:
 pub async fn build_image(app: &AppState, project: &Project, log: &mut (dyn FnMut(String) + Send)) -> anyhow::Result<String> {
     let base_df = project.container_dockerfile.clone().unwrap_or_else(|| DEFAULT_BASE.to_string());
     let (uid, gid) = ids();
-    let overlay_tmpl = OVERLAY.replace("{{UID}}", &uid.to_string()).replace("{{GID}}", &gid.to_string());
+    let overlay_tmpl = OVERLAY.replace("{{EXECUTABLES}}", &OVERLAY_EXECUTABLES.join(" ")).replace("{{UID}}", &uid.to_string()).replace("{{GID}}", &gid.to_string());
     let hash = hex::encode(&Sha256::digest(format!("{base_df}\n---\n{overlay_tmpl}").as_bytes())[..6]);
     let base_tag = format!("akb-base/{}:{hash}", project.slug);
     let tag = format!("akb/{}:{hash}", project.slug);
@@ -193,6 +198,12 @@ pub async fn run_args(
                 }
             }
         }
+        "opencode" => {
+            if let Some(home) = dirs::home_dir() {
+                let xdg = |var: &str, fallback: &str| std::env::var_os(var).filter(|v| !v.is_empty()).map_or_else(|| home.join(fallback), Into::into);
+                a.extend(opencode_mounts(&xdg("XDG_DATA_HOME", ".local/share"), &xdg("XDG_CONFIG_HOME", ".config")));
+            }
+        }
         _ => {}
     }
     for (k, v) in &secrets.container_env {
@@ -210,12 +221,35 @@ pub async fn run_args(
     }
     a.extend(project.container_extra_args.0.iter().cloned());
     a.push(image);
-    let cmd: Vec<String> = match &agent.container_command {
+    a.extend(container_command(agent));
+    Ok(ContainerLaunch { name, args: a })
+}
+
+/// `-v` arguments sharing the host's OpenCode login (`<data home>/opencode/auth.json`, writable so
+/// OAuth tokens can refresh) and global config (`<config home>/opencode`, read-only) with the
+/// container user. Missing paths are skipped so Docker doesn't create them as root-owned
+/// directories; the overlay pre-creates the parents as the agent user.
+pub fn opencode_mounts(data_home: &Path, config_home: &Path) -> Vec<String> {
+    let mut a = Vec::new();
+    let auth = data_home.join("opencode/auth.json");
+    if auth.is_file() {
+        a.push("-v".into());
+        a.push(format!("{}:/home/agent/.local/share/opencode/auth.json", auth.display()));
+    }
+    let config = config_home.join("opencode");
+    if config.is_dir() {
+        a.push("-v".into());
+        a.push(format!("{}:/home/agent/.config/opencode:ro", config.display()));
+    }
+    a
+}
+
+/// The command line an agent runs inside the container: its container override, else its host command.
+pub fn container_command(agent: &AgentDefinition) -> Vec<String> {
+    match &agent.container_command {
         Some(c) if !c.0.is_empty() => c.0.clone(),
         _ => std::iter::once(agent.command.clone()).chain(agent.args.0.iter().cloned()).collect(),
-    };
-    a.extend(cmd);
-    Ok(ContainerLaunch { name, args: a })
+    }
 }
 
 /// `docker run` arguments that execute the project's setup script in its image, with the same
