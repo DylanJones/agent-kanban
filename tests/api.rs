@@ -360,3 +360,13 @@ async fn attachment_upload_and_download() {
     assert_eq!(body, png);
     assert_eq!(headers.get("content-type").unwrap(), "image/png");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_builtin_agent_runs_an_executable_the_container_overlay_installs() {
+    let env = setup().await;
+    for slug in ["claude", "codex", "opencode"] {
+        let a = agent(&env, slug).await;
+        let cmd = agent_kanban::container::container_command(&a);
+        assert!(agent_kanban::container::OVERLAY_EXECUTABLES.contains(&cmd[0].as_str()), "{slug} runs {cmd:?} in containers, which the overlay does not install");
+    }
+}
