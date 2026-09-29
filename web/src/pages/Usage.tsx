@@ -290,7 +290,8 @@ export default function UsagePage() {
           {r && <Breakdown rows={r.rows} total={r.totals.total_tokens} group={r.group_by} />}
         </div>
         <p className="text-xs leading-relaxed text-fg-subtle">
-          Totals come from each agent's session log where available (exact, per model), otherwise from what the agent reports over ACP. *Cost is the API-equivalent figure Claude reports
+          Token totals add up every request an agent made: each request's input (including cache reads) plus its output. Agents resend the conversation on every turn, so a
+          run's total is usually many times its context window — it measures work done, not what was loaded at once. Totals come from each agent's session log where available (exact, per model), otherwise from what the agent reports over ACP. *Cost is the API-equivalent figure Claude reports
           during live runs; subscription usage isn't billed per token.
         </p>
       </div>
