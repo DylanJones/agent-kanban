@@ -28,14 +28,14 @@ function Step({ n, title, done, children }: { n: number; title: string; done?: b
     <div className="flex gap-3">
       <div
         className={clsx(
-          "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold",
-          done ? "bg-emerald-600 text-white" : "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
+          "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold",
+          done ? "bg-emerald-500 text-white" : "bg-accent-soft text-accent-fg",
         )}
       >
         {done ? <Check size={13} /> : n}
       </div>
-      <div className="min-w-0 flex-1 space-y-2">
-        <div className="text-sm font-medium">{title}</div>
+      <div className="min-w-0 flex-1 space-y-2 pt-1">
+        <div className="text-sm font-semibold">{title}</div>
         {children}
       </div>
     </div>
@@ -83,8 +83,8 @@ export function ConnectClaudeModal() {
     <Modal open onClose={close} title={<span className="flex items-center gap-2"><KeyRound size={16} /> Connect Claude for containers</span>} wide>
       {result?.saved ? (
         <div className="space-y-3">
-          <div className="flex items-start gap-2 rounded-md border border-emerald-300 bg-emerald-50 p-3 text-sm dark:border-emerald-900 dark:bg-emerald-950/30">
-            <ShieldCheck size={16} className="mt-0.5 text-emerald-600" />
+          <div className="flex items-start gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/8 p-4 text-sm">
+            <ShieldCheck size={18} className="mt-0.5 shrink-0 text-emerald-500" />
             <div>
               Claude is connected.{" "}
               {result.tested_in ? (
@@ -102,7 +102,7 @@ export function ConnectClaudeModal() {
         </div>
       ) : (
         <div className="space-y-5">
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">
+          <p className="text-sm leading-relaxed text-fg-muted">
             {containers.length ? (
               <>
                 <b>{containers.join(", ")}</b> {containers.length === 1 ? "runs" : "run"} agents in Docker containers. Claude normally signs in with the login stored in your Mac's Keychain, which a
@@ -114,7 +114,7 @@ export function ConnectClaudeModal() {
           </p>
           <Step n={1} title="Create a token in a terminal">
             <div className="flex items-center gap-2">
-              <code className="flex-1 rounded-md bg-zinc-100 px-3 py-2 font-mono text-xs dark:bg-zinc-800">{COMMAND}</code>
+              <code className="min-w-0 flex-1 truncate rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs">{COMMAND}</code>
               <Button
                 size="sm"
                 onClick={() => {
@@ -126,7 +126,7 @@ export function ConnectClaudeModal() {
                 {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? "Copied" : "Copy"}
               </Button>
             </div>
-            <p className="text-xs text-zinc-500">It opens your browser to approve access with your Claude account, then prints a token starting with <code>sk-ant-oat</code>.</p>
+            <p className="text-xs text-fg-subtle">It opens your browser to approve access with your Claude account, then prints a token starting with <code>sk-ant-oat</code>.</p>
           </Step>
           <Step n={2} title="Paste it here">
             <input
@@ -138,23 +138,23 @@ export function ConnectClaudeModal() {
               value={token}
               onChange={(e) => setToken(e.target.value)}
             />
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-fg-subtle">
               It's stored in <code>~/.agent-kanban/secrets.toml</code> (readable only by you) and passed only to Claude containers. This page never shows it again.
             </p>
           </Step>
           <Step n={3} title="Check it works">
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-fg-subtle">
               {containers.length
                 ? "Saving starts Claude inside the project's container and sends it a one-line prompt (a few tokens). The token is saved only if that works."
                 : "No project uses containers yet, so the token is saved without a test run."}
             </p>
             {failed && (
-              <div className="space-y-1 rounded-md border border-rose-300 bg-rose-50 p-3 text-xs dark:border-rose-900 dark:bg-rose-950/30">
+              <div className="space-y-1 rounded-xl border border-rose-500/30 bg-rose-500/8 p-3 text-xs">
                 <div className="font-medium text-rose-800 dark:text-rose-300">
                   Claude couldn't sign in with that token{result.test?.limit === "auth" ? "" : result.test?.limit ? ` (it hit a ${result.test.limit} limit)` : ""}. Nothing was saved.
                 </div>
                 {result.test?.error && <div className="text-rose-700 dark:text-rose-400">{result.test.error}</div>}
-                <div className="text-zinc-600 dark:text-zinc-400">Check you copied the whole token, or run the command again for a new one.</div>
+                <div className="text-fg-muted">Check you copied the whole token, or run the command again for a new one.</div>
               </div>
             )}
             <ErrorBox error={save.error} />

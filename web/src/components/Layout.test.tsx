@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { useState } from "react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
@@ -29,7 +29,11 @@ function ok<T>(data: T) {
 
 function mockEndpoints() {
   getMock.mockImplementation((path: string) => {
-    if (path === "/api/projects") return ok([{ slug: "demo", name: "Demo" }]);
+    if (path === "/api/projects")
+      return ok([
+        { slug: "demo", name: "Demo", github_repo: "someone/demo" },
+        { slug: "other", name: "Other" },
+      ]);
     if (path === "/api/settings") return ok({ scheduler_enabled: false, max_concurrent_runs: 3 });
     if (path === "/api/runs") return ok([]);
     throw new Error(`unexpected path: ${path}`);
@@ -171,6 +175,39 @@ describe("NavDrawer", () => {
     const onClose = vi.fn();
     renderDrawer(true, onClose, ["/p/demo"]);
     fireEvent.click(await screen.findByRole("link", { name: /agent-kanban/ }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  test("the project switcher opens a menu of projects, and Escape closes only the menu", async () => {
+    const onClose = vi.fn();
+    renderDrawer(true, onClose);
+    const switcher = await screen.findByRole("button", { name: /Demo/ });
+    expect(switcher.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(switcher);
+    const menu = screen.getByRole("menu", { name: "Projects" });
+    const current = within(menu).getByRole("menuitemradio", { name: /Demo/ });
+    expect(current.getAttribute("aria-checked")).toBe("true");
+    expect(within(menu).getByRole("menuitemradio", { name: /Other/ }).getAttribute("aria-checked")).toBe("false");
+    expect(within(menu).getByRole("menuitem", { name: /Add project/ })).toBeTruthy();
+    expect(document.activeElement).toBe(current);
+
+    fireEvent.keyDown(current, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(within(menu).getByRole("menuitemradio", { name: /Other/ }));
+
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(switcher);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  test("choosing another project navigates there", async () => {
+    const onClose = vi.fn();
+    renderDrawer(true, onClose);
+    fireEvent.click(await screen.findByRole("button", { name: /Demo/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Other/ }));
+    expect(screen.queryByRole("menu")).toBeNull();
+    // The drawer closes on any route change, so reaching the other project's board shows up as a close.
     expect(onClose).toHaveBeenCalled();
   });
 });

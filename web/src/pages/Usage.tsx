@@ -3,7 +3,7 @@ import clsx from "clsx";
 import { Clock } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type S, client, unwrap } from "../api/client";
-import { ErrorBox, Pill, timeAgo } from "../components/ui";
+import { ErrorBox, Page, PageHeader, Pill, Segmented, timeAgo } from "../components/ui";
 
 type Report = S["UsageReport"];
 type Row = S["UsageRow"];
@@ -37,12 +37,14 @@ const GROUPS: [string, string][] = [
 const SERIES_VAR: Record<string, string> = { claude: "var(--series-1)", codex: "var(--series-2)", opencode: "var(--series-3)" };
 const seriesColor = (name: string, i: number) => SERIES_VAR[name] ?? ["var(--series-4)", "var(--series-5)", "var(--series-6)"][i % 3];
 
+const card = "rounded-xl border border-line bg-surface shadow-card";
+
 function Tile({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 py-3">
-      <div className="text-xs text-zinc-500">{label}</div>
-      <div className="text-2xl font-semibold tabular-nums">{value}</div>
-      {sub && <div className="text-xs text-zinc-500">{sub}</div>}
+    <div className={clsx(card, "px-4 py-3.5")}>
+      <div className="text-xs font-medium text-fg-muted">{label}</div>
+      <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">{value}</div>
+      {sub && <div className="mt-0.5 truncate text-xs text-fg-subtle">{sub}</div>}
     </div>
   );
 }
@@ -50,51 +52,51 @@ function Tile({ label, value, sub }: { label: string; value: string; sub?: strin
 function Subscriptions() {
   const subs = useQuery({ queryKey: ["usage", "subs"], queryFn: () => unwrap(client.GET("/api/usage/subscriptions")), refetchInterval: 30000 });
   if (!subs.data) return null;
+  const shown = subs.data.filter((s) => s.windows.length > 0 || s.tokens_7d > 0 || s.paused);
+  if (shown.length === 0) return null;
   return (
     <div className="grid gap-3 md:grid-cols-3">
-      {subs.data
-        .filter((s) => s.windows.length > 0 || s.tokens_7d > 0 || s.paused)
-        .map((s, i) => (
-          <div key={s.name} className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 space-y-2">
-            <div className="flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-sm" style={{ background: seriesColor(s.name, i) }} />
-              <span className="font-medium">{s.name}</span>
-              {s.plan && <Pill className="bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400">{s.plan}</Pill>}
-              {s.paused && (
-                <Pill className="bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300">
-                  <Clock size={10} /> paused ({s.pause_kind}){s.paused_until ? ` · ${timeAgo(s.paused_until)}` : ""}
-                </Pill>
-              )}
-            </div>
-            <div className="text-xs text-zinc-500">{s.agents.join(", ")}</div>
-            {s.windows.map((w) => {
-              const pct = Math.max(0, Math.min(100, w.used_percent ?? 0));
-              return (
-                <div key={w.name} className="space-y-0.5">
-                  <div className="flex justify-between text-xs">
-                    <span className="text-zinc-600 dark:text-zinc-400">{w.name.replace("_", " ")} window</span>
-                    <span className="tabular-nums text-zinc-700 dark:text-zinc-300">
-                      {w.used_percent == null ? "—" : `${Math.round(pct)}%`}
-                      {w.resets_at ? <span className="text-zinc-500"> · resets {timeAgo(w.resets_at)}</span> : null}
-                    </span>
-                  </div>
-                  <div className="h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden" role="meter" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-                    <div className={clsx("h-full rounded-full", pct >= 90 ? "bg-rose-500" : pct >= 75 ? "bg-amber-500" : "bg-zinc-500 dark:bg-zinc-400")} style={{ width: `${pct}%` }} />
-                  </div>
-                </div>
-              );
-            })}
-            <div className="flex gap-4 pt-1 text-xs text-zinc-500">
-              <span>
-                24h <b className="text-zinc-800 dark:text-zinc-200 tabular-nums">{fmtTokens(s.tokens_24h)}</b>
-              </span>
-              <span>
-                7d <b className="text-zinc-800 dark:text-zinc-200 tabular-nums">{fmtTokens(s.tokens_7d)}</b>
-              </span>
-              <span className="ml-auto">updated {timeAgo(s.updated_at)}</span>
-            </div>
+      {shown.map((s, i) => (
+        <div key={s.name} className={clsx(card, "space-y-3 p-4")}>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="h-2.5 w-2.5 rounded-full" style={{ background: seriesColor(s.name, i) }} />
+            <span className="font-semibold">{s.name}</span>
+            {s.plan && <Pill>{s.plan}</Pill>}
+            {s.paused && (
+              <Pill tone="amber">
+                <Clock size={10} /> paused ({s.pause_kind}){s.paused_until ? ` · ${timeAgo(s.paused_until)}` : ""}
+              </Pill>
+            )}
           </div>
-        ))}
+          <div className="text-xs text-fg-subtle">{s.agents.join(", ")}</div>
+          {s.windows.map((w) => {
+            const pct = Math.max(0, Math.min(100, w.used_percent ?? 0));
+            return (
+              <div key={w.name} className="space-y-1">
+                <div className="flex justify-between gap-2 text-xs">
+                  <span className="text-fg-muted">{w.name.replace("_", " ")} window</span>
+                  <span className="text-fg tabular-nums">
+                    {w.used_percent == null ? "—" : `${Math.round(pct)}%`}
+                    {w.resets_at ? <span className="text-fg-subtle"> · resets {timeAgo(w.resets_at)}</span> : null}
+                  </span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-surface-3" role="meter" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+                  <div className={clsx("h-full rounded-full transition-[width]", pct >= 90 ? "bg-rose-500" : pct >= 75 ? "bg-amber-500" : "bg-accent")} style={{ width: `${pct}%` }} />
+                </div>
+              </div>
+            );
+          })}
+          <div className="flex gap-4 border-t border-line pt-3 text-xs text-fg-subtle">
+            <span>
+              24h <b className="font-semibold text-fg tabular-nums">{fmtTokens(s.tokens_24h)}</b>
+            </span>
+            <span>
+              7d <b className="font-semibold text-fg tabular-nums">{fmtTokens(s.tokens_7d)}</b>
+            </span>
+            <span className="ml-auto">updated {timeAgo(s.updated_at)}</span>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -124,48 +126,48 @@ function DailyChart({ report }: { report: Report }) {
     const max = Math.max(1, ...days.map(([, m]) => Object.values(m).reduce((a, b) => a + b, 0)));
     return { days, subs, max };
   }, [report.daily, report.from, report.to]);
-  if (days.length === 0) return <div className="text-sm text-zinc-500 italic py-8 text-center">No agent usage in this range yet.</div>;
+  if (days.length === 0) return <div className="py-10 text-center text-sm text-fg-subtle">No agent usage in this range yet.</div>;
   const H = 180;
   const hovered = days.find(([d]) => d === hover);
   return (
-    <div className="viz-root space-y-2">
-      <div className="flex items-center gap-4 text-xs text-[var(--text-secondary)]">
-        <span className="font-medium text-[var(--text-primary)]">Tokens per day</span>
+    <div className="viz-root space-y-3">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-muted">
+        <span className="text-sm font-semibold text-fg">Tokens per day</span>
         {subs.map((s, i) => (
-          <span key={s} className="inline-flex items-center gap-1">
-            <span className="h-2.5 w-2.5 rounded-sm" style={{ background: seriesColor(s, i) }} /> {s}
+          <span key={s} className="inline-flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-full" style={{ background: seriesColor(s, i) }} /> {s}
           </span>
         ))}
         <span className="ml-auto tabular-nums">peak {fmtTokens(max)}</span>
       </div>
       <div className="relative">
-        <div className="flex items-end gap-[2px]" style={{ height: H }} onMouseLeave={() => setHover(null)}>
+        <div className="flex items-end gap-[2px] border-b border-line" style={{ height: H }} onMouseLeave={() => setHover(null)}>
           {days.map(([day, m]) => {
             const total = Object.values(m).reduce((a, b) => a + b, 0);
             return (
-              <div key={day} className="group relative flex h-full min-w-0 flex-1 flex-col items-center justify-end" onMouseEnter={() => setHover(day)}>
-                <div className="flex w-full max-w-10 flex-col-reverse gap-[2px] overflow-hidden rounded-t" style={{ height: `${(total / max) * 100}%` }}>
+              <div key={day} className="group relative flex h-full min-w-0 flex-1 flex-col items-center justify-end" onMouseEnter={() => setHover(day)} onTouchStart={() => setHover(day)}>
+                <div className="flex w-full max-w-10 flex-col-reverse gap-[2px] overflow-hidden rounded-t-md" style={{ height: `${(total / max) * 100}%` }}>
                   {subs.map((s, i) =>
-                    m[s] ? <div key={s} style={{ flexGrow: m[s], flexBasis: 0, background: seriesColor(s, i), opacity: hover && hover !== day ? 0.45 : 1 }} /> : null,
+                    m[s] ? <div key={s} style={{ flexGrow: m[s], flexBasis: 0, background: seriesColor(s, i), opacity: hover && hover !== day ? 0.4 : 1 }} className="transition-opacity" /> : null,
                   )}
                 </div>
               </div>
             );
           })}
         </div>
-        <div className="mt-1 flex justify-between text-[10px] text-[var(--text-secondary)] tabular-nums">
+        <div className="mt-1.5 flex justify-between text-[10px] text-fg-subtle tabular-nums">
           <span>{days[0][0]}</span>
           {days.length > 1 && <span>{days[days.length - 1][0]}</span>}
         </div>
         {hovered && Object.keys(hovered[1]).length > 0 && (
-          <div className="pointer-events-none absolute right-0 top-0 rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-xs shadow-lg">
-            <div className="font-medium">{hovered[0]}</div>
+          <div className="pointer-events-none absolute top-0 right-0 animate-fade-in rounded-xl border border-line bg-surface/95 px-3 py-2 text-xs shadow-raised backdrop-blur">
+            <div className="mb-1 font-semibold">{hovered[0]}</div>
             {subs.map((s, i) =>
               hovered[1][s] ? (
                 <div key={s} className="flex items-center gap-2 tabular-nums">
-                  <span className="h-2 w-2 rounded-sm" style={{ background: seriesColor(s, i) }} />
-                  <span className="text-zinc-600 dark:text-zinc-400">{s}</span>
-                  <span className="ml-auto pl-4">{fmtTokens(hovered[1][s])}</span>
+                  <span className="h-2 w-2 rounded-full" style={{ background: seriesColor(s, i) }} />
+                  <span className="text-fg-muted">{s}</span>
+                  <span className="ml-auto pl-4 font-medium">{fmtTokens(hovered[1][s])}</span>
                 </div>
               ) : null,
             )}
@@ -178,43 +180,51 @@ function DailyChart({ report }: { report: Report }) {
 
 function Breakdown({ rows, total, group }: { rows: Row[]; total: number; group: string }) {
   const hasCost = rows.some((r) => r.cost_usd != null);
+  const th = "py-2.5 px-3 text-right font-medium whitespace-nowrap";
+  const td = "py-2 px-3 text-right text-fg-muted";
   return (
-    <table className="w-full text-sm tabular-nums">
-      <thead className="text-xs text-zinc-500">
-        <tr className="border-b border-zinc-200 dark:border-zinc-800">
-          <th className="py-2 text-left font-medium">{GROUPS.find((g) => g[0] === group)?.[1]}</th>
-          <th className="py-2 text-right font-medium">Runs</th>
-          <th className="py-2 text-right font-medium">Total</th>
-          <th className="py-2 pl-3 text-left font-medium w-40">Share</th>
-          <th className="py-2 text-right font-medium">Input</th>
-          <th className="py-2 text-right font-medium">Cache read</th>
-          <th className="py-2 text-right font-medium">Cache write</th>
-          <th className="py-2 text-right font-medium">Output</th>
-          {hasCost && <th className="py-2 text-right font-medium" title="API-equivalent cost reported by the agent">Cost*</th>}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r) => (
-          <tr key={r.key} className="border-b border-zinc-100 dark:border-zinc-800/60">
-            <td className="py-1.5 pr-3 max-w-72 truncate" title={r.key}>
-              {r.key}
-            </td>
-            <td className="py-1.5 text-right">{r.runs}</td>
-            <td className="py-1.5 text-right font-medium">{fmtTokens(r.total_tokens)}</td>
-            <td className="py-1.5 pl-3">
-              <div className="h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800">
-                <div className="h-full rounded-full bg-[var(--series-1)]" style={{ width: `${total ? (r.total_tokens / total) * 100 : 0}%` }} />
-              </div>
-            </td>
-            <td className="py-1.5 text-right text-zinc-600 dark:text-zinc-400">{fmtTokens(r.input_tokens)}</td>
-            <td className="py-1.5 text-right text-zinc-600 dark:text-zinc-400">{fmtTokens(r.cached_input_tokens)}</td>
-            <td className="py-1.5 text-right text-zinc-600 dark:text-zinc-400">{fmtTokens(r.cache_write_tokens)}</td>
-            <td className="py-1.5 text-right text-zinc-600 dark:text-zinc-400">{fmtTokens(r.output_tokens)}</td>
-            {hasCost && <td className="py-1.5 text-right text-zinc-600 dark:text-zinc-400">{r.cost_usd != null ? `$${r.cost_usd.toFixed(2)}` : "—"}</td>}
+    <div className="-mx-4 overflow-x-auto sm:-mx-5">
+      <table className="w-full min-w-[640px] text-sm tabular-nums">
+        <thead className="text-xs text-fg-subtle">
+          <tr className="border-b border-line">
+            <th className="py-2.5 pr-3 pl-4 text-left font-medium sm:pl-5">{GROUPS.find((g) => g[0] === group)?.[1]}</th>
+            <th className={th}>Runs</th>
+            <th className={th}>Total</th>
+            <th className="w-36 px-3 py-2.5 text-left font-medium">Share</th>
+            <th className={th}>Input</th>
+            <th className={th}>Cache read</th>
+            <th className={th}>Cache write</th>
+            <th className={clsx(th, !hasCost && "pr-4 sm:pr-5")}>Output</th>
+            {hasCost && (
+              <th className={clsx(th, "pr-4 sm:pr-5")} title="API-equivalent cost reported by the agent">
+                Cost*
+              </th>
+            )}
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody className="divide-y divide-line/70">
+          {rows.map((r) => (
+            <tr key={r.key} className="transition-colors hover:bg-surface-2/50">
+              <td className="max-w-72 truncate py-2 pr-3 pl-4 font-medium sm:pl-5" title={r.key}>
+                {r.key}
+              </td>
+              <td className={td}>{r.runs}</td>
+              <td className="px-3 py-2 text-right font-semibold">{fmtTokens(r.total_tokens)}</td>
+              <td className="px-3 py-2">
+                <div className="h-1.5 rounded-full bg-surface-3">
+                  <div className="h-full rounded-full bg-[var(--series-1)]" style={{ width: `${total ? (r.total_tokens / total) * 100 : 0}%` }} />
+                </div>
+              </td>
+              <td className={td}>{fmtTokens(r.input_tokens)}</td>
+              <td className={td}>{fmtTokens(r.cached_input_tokens)}</td>
+              <td className={td}>{fmtTokens(r.cache_write_tokens)}</td>
+              <td className={clsx(td, !hasCost && "pr-4 sm:pr-5")}>{fmtTokens(r.output_tokens)}</td>
+              {hasCost && <td className={clsx(td, "pr-4 sm:pr-5")}>{r.cost_usd != null ? `$${r.cost_usd.toFixed(2)}` : "—"}</td>}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -244,25 +254,21 @@ export default function UsagePage() {
   const t = r?.totals;
   const cacheShare = t && t.total_tokens ? Math.round((t.cached_input_tokens / t.total_tokens) * 100) : 0;
   return (
-    <div className="mx-auto max-w-6xl p-6 space-y-5">
+    <Page width="xl">
       <style>{`
-        .viz-root, .usage-page { --series-1:#2a78d6; --series-2:#eb6834; --series-3:#1baf7a; --series-4:#eda100; --series-5:#e87ba4; --series-6:#008300; --text-primary:#0b0b0b; --text-secondary:#52514e; }
-        .dark .viz-root, .dark .usage-page { --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70; --series-4:#c98500; --series-5:#d55181; --series-6:#008300; --text-primary:#ffffff; --text-secondary:#c3c2b7; }
+        .viz-root, .usage-page { --series-1:#2a78d6; --series-2:#eb6834; --series-3:#1baf7a; --series-4:#eda100; --series-5:#e87ba4; --series-6:#008300; }
+        .dark .viz-root, .dark .usage-page { --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70; --series-4:#c98500; --series-5:#d55181; --series-6:#008300; }
       `}</style>
       <div className="usage-page space-y-5">
-        <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold">Usage</h1>
-          <div className="ml-auto flex rounded-md border border-zinc-300 dark:border-zinc-700 overflow-hidden text-sm">
-            {RANGES.map(([label, d]) => (
-              <button key={label} onClick={() => setDays(d)} className={clsx("px-3 py-1", days === d ? "bg-zinc-200 dark:bg-zinc-800 font-medium" : "hover:bg-zinc-100 dark:hover:bg-zinc-900")}>
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
+        <PageHeader
+          className="mb-1"
+          title="Usage"
+          subtitle="Tokens your agents spent, by subscription, model and phase."
+          actions={<Segmented label="Range" value={days} onChange={setDays} options={RANGES.map(([label, d]) => ({ value: d, label }))} />}
+        />
         <ErrorBox error={report.error} />
         {t && (
-          <div className={clsx("grid grid-cols-2 gap-3 md:grid-cols-5 transition-opacity", stale && "opacity-60")}>
+          <div className={clsx("grid grid-cols-2 gap-3 transition-opacity lg:grid-cols-5", stale && "opacity-60")}>
             <Tile label="Total tokens" value={fmtTokens(t.total_tokens)} sub={`${t.runs} runs`} />
             <Tile label="Output tokens" value={fmtTokens(t.output_tokens)} sub={t.reasoning_tokens ? `${fmtTokens(t.reasoning_tokens)} reasoning` : undefined} />
             <Tile label="Cache reads" value={`${cacheShare}%`} sub={`${fmtTokens(t.cached_input_tokens)} of total`} />
@@ -272,25 +278,22 @@ export default function UsagePage() {
         )}
         <Subscriptions />
         {r && (
-          <div className={clsx("rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 transition-opacity", stale && "opacity-60")}>
+          <div className={clsx(card, "p-4 transition-opacity sm:p-5", stale && "opacity-60")}>
             <DailyChart report={r} />
           </div>
         )}
-        <div className={clsx("rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 space-y-3 transition-opacity", stale && "opacity-60")}>
-          <div className="flex flex-wrap gap-1">
-            {GROUPS.map(([g, label]) => (
-              <button key={g} onClick={() => setGroup(g)} className={clsx("rounded-md px-2.5 py-1 text-sm", group === g ? "bg-zinc-200 dark:bg-zinc-800 font-medium" : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800/60")}>
-                {label}
-              </button>
-            ))}
+        <div className={clsx(card, "space-y-3 overflow-hidden p-4 transition-opacity sm:p-5", stale && "opacity-60")}>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-sm font-semibold">Breakdown</span>
+            <Segmented size="sm" label="Group by" value={group} onChange={setGroup} options={GROUPS.map(([g, label]) => ({ value: g, label }))} />
           </div>
           {r && <Breakdown rows={r.rows} total={r.totals.total_tokens} group={r.group_by} />}
         </div>
-        <p className="text-xs text-zinc-500">
-          Totals come from each agent's session log where available (exact, per model), otherwise from what the agent reports over ACP. *Cost is
-          the API-equivalent figure Claude reports during live runs; subscription usage isn't billed per token.
+        <p className="text-xs leading-relaxed text-fg-subtle">
+          Totals come from each agent's session log where available (exact, per model), otherwise from what the agent reports over ACP. *Cost is the API-equivalent figure Claude reports
+          during live runs; subscription usage isn't billed per token.
         </p>
       </div>
-    </div>
+    </Page>
   );
 }

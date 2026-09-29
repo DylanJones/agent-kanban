@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { AlertTriangle, RefreshCw } from "lucide-react";
+import { AlertTriangle, CheckCircle2, GitCommitHorizontal, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { type S, client, unwrap } from "../api/client";
-import { Button, ErrorBox, Pill, TimeAgo, short } from "../components/ui";
+import { Button, ErrorBox, Page, PageHeader, Pill, TimeAgo, short } from "../components/ui";
 
 type BuildStatus = S["BuildStatus"];
 
@@ -28,32 +28,38 @@ function JobLog() {
   const j = jobs.data?.[0];
   if (!j) return null;
   return (
-    <div className="space-y-1">
-      <div className="text-xs text-zinc-500">
-        Last build:{" "}
-        <Pill className={j.status === "succeeded" ? "bg-emerald-100 text-emerald-800" : j.status === "failed" ? "bg-rose-100 text-rose-800" : "bg-sky-100 text-sky-800"}>
-          {j.status}
-        </Pill>{" "}
-        <TimeAgo iso={j.created_at} />
+    <section className="space-y-2 rounded-2xl border border-line bg-surface p-5 shadow-card">
+      <div className="flex items-center gap-2 text-xs text-fg-muted">
+        Last build: <Pill tone={j.status === "succeeded" ? "green" : j.status === "failed" ? "red" : "sky"}>{j.status}</Pill>
+        <TimeAgo iso={j.created_at} className="text-fg-subtle" />
       </div>
-      {j.log && <pre className="max-h-72 overflow-auto rounded bg-zinc-900 text-zinc-300 p-2 text-[11px]">{j.log.split("\n").slice(-200).join("\n")}</pre>}
-      {j.error && <div className="text-xs text-rose-600">{j.error}</div>}
-    </div>
+      {j.log && <pre className="max-h-80 overflow-auto rounded-xl bg-zinc-950 p-3 font-mono text-[11px] leading-relaxed text-zinc-300">{j.log.split("\n").slice(-200).join("\n")}</pre>}
+      {j.error && <div className="text-xs text-rose-600 dark:text-rose-400">{j.error}</div>}
+    </section>
   );
 }
 
 function CommitsBehind({ status }: { status: BuildStatus }) {
   if (status.commits_behind == null) {
     if (status.head_sha && status.head_sha !== status.build_sha) {
-      return <span className="text-zinc-500">Running {short(status.build_sha)}; can't tell how far behind {short(status.head_sha)} it is.</span>;
+      return <span className="text-fg-muted">Running {short(status.build_sha)}; can't tell how far behind {short(status.head_sha)} it is.</span>;
     }
-    return <span className="text-emerald-600 dark:text-emerald-400">Up to date ({short(status.build_sha)}).</span>;
+    return (
+      <span className="inline-flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400">
+        <CheckCircle2 size={16} /> Up to date ({short(status.build_sha)}).
+      </span>
+    );
   }
   if (status.commits_behind === 0) {
-    return <span className="text-emerald-600 dark:text-emerald-400">Up to date ({short(status.build_sha)}).</span>;
+    return (
+      <span className="inline-flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400">
+        <CheckCircle2 size={16} /> Up to date ({short(status.build_sha)}).
+      </span>
+    );
   }
   return (
-    <span className="text-amber-700 dark:text-amber-400">
+    <span className="inline-flex items-center gap-1.5 text-amber-700 dark:text-amber-400">
+      <GitCommitHorizontal size={16} className="shrink-0" />
       {status.commits_behind} new commit{status.commits_behind === 1 ? "" : "s"} since this build ({short(status.build_sha)} → {short(status.head_sha)}).
     </span>
   );
@@ -138,49 +144,54 @@ export default function ServerPage() {
   });
 
   if (status.isLoading) return null;
-  if (!status.data) return <ErrorBox error={status.error} />;
+  if (!status.data)
+    return (
+      <Page width="sm">
+        <ErrorBox error={status.error} />
+      </Page>
+    );
   const s = status.data;
   const restarting = (awaitingJobId != null && !buildFailed) || s.restart_pending;
   const busy = restarting || rebuild.isPending;
 
   return (
-    <div className="mx-auto max-w-2xl space-y-4 p-4">
-      <h1 className="text-lg font-semibold">Server</h1>
-      <section className="space-y-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
-        <div className="text-sm">
-          <CommitsBehind status={s} />
-        </div>
-        <div className="text-xs text-zinc-500">
-          Built <TimeAgo iso={s.build_time} /> from {short(s.build_sha)}.
-        </div>
-        {s.dirty && (
-          <div className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400">
-            <AlertTriangle size={13} /> The checkout has uncommitted changes; a rebuild would include them.
+    <Page width="sm">
+      <PageHeader title="Server" subtitle="Rebuild and restart agent-kanban from this checkout, right from the app." />
+      <div className="space-y-4">
+        <section className="space-y-3 rounded-2xl border border-line bg-surface p-5 shadow-card">
+          <div className="text-[15px] font-medium">
+            <CommitsBehind status={s} />
           </div>
-        )}
-        {restarting ? (
-          <div className="flex items-center gap-2 text-sm text-sky-700 dark:text-sky-400">
-            <RefreshCw size={14} className="animate-spin" />
-            {s.dispatch_paused && s.active_runs > 0
-              ? `Waiting for ${s.active_runs} active run${s.active_runs === 1 ? "" : "s"} to finish, then restarting…`
-              : "Restarting… this page will reload automatically."}
+          <div className="text-xs text-fg-subtle">
+            Built <TimeAgo iso={s.build_time} /> from {short(s.build_sha)}.
           </div>
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            <Button variant="primary" disabled={busy} onClick={() => rebuild.mutate("now")} title="Rebuild, then restart immediately. Active agent runs are interrupted and resume after the restart.">
-              <RefreshCw size={13} className={clsx(rebuild.isPending && "animate-spin")} /> Rebuild &amp; restart now
-            </Button>
-            <Button disabled={busy} onClick={() => rebuild.mutate("drain")} title="Rebuild, stop dispatching new runs, and restart once the active ones finish.">
-              Rebuild &amp; restart when idle
-            </Button>
-          </div>
-        )}
-        {deployError && <div className="text-xs text-rose-600">{deployError}</div>}
-        {rebuild.isError && <ErrorBox error={rebuild.error} />}
-      </section>
-      <section className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+          {s.dirty && (
+            <div className="flex items-center gap-1.5 rounded-lg bg-amber-500/8 px-2.5 py-1.5 text-xs text-amber-800 dark:text-amber-300">
+              <AlertTriangle size={13} /> The checkout has uncommitted changes; a rebuild would include them.
+            </div>
+          )}
+          {restarting ? (
+            <div className="flex items-center gap-2 rounded-xl bg-sky-500/10 px-3 py-2.5 text-sm text-sky-700 dark:text-sky-300">
+              <RefreshCw size={14} className="animate-spin" />
+              {s.dispatch_paused && s.active_runs > 0
+                ? `Waiting for ${s.active_runs} active run${s.active_runs === 1 ? "" : "s"} to finish, then restarting…`
+                : "Restarting… this page will reload automatically."}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2 pt-1 sm:flex-row">
+              <Button className="justify-center" variant="primary" disabled={busy} onClick={() => rebuild.mutate("now")} title="Rebuild, then restart immediately. Active agent runs are interrupted and resume after the restart.">
+                <RefreshCw size={13} className={clsx(rebuild.isPending && "animate-spin")} /> Rebuild &amp; restart now
+              </Button>
+              <Button className="justify-center" disabled={busy} onClick={() => rebuild.mutate("drain")} title="Rebuild, stop dispatching new runs, and restart once the active ones finish.">
+                Rebuild &amp; restart when idle
+              </Button>
+            </div>
+          )}
+          {deployError && <div className="text-xs text-rose-600 dark:text-rose-400">{deployError}</div>}
+          {rebuild.isError && <ErrorBox error={rebuild.error} />}
+        </section>
         <JobLog />
-      </section>
-    </div>
+      </div>
+    </Page>
   );
 }

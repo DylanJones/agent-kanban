@@ -14,38 +14,57 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { AlertTriangle, Ban, Bot, Check, Clock, GitMerge, GitPullRequest, KeyRound, MessageSquare, Moon, Plus, Search, SlidersHorizontal, UserRound } from "lucide-react";
-import { useMemo, useState } from "react";
+import {
+  AlertTriangle,
+  Ban,
+  Bot,
+  Check,
+  CheckCircle2,
+  Clock,
+  GitMerge,
+  GitPullRequest,
+  KeyRound,
+  MessageSquare,
+  MessagesSquare,
+  Moon,
+  PauseCircle,
+  Plus,
+  RotateCcw,
+  Search,
+  SlidersHorizontal,
+  Square,
+  UserRound,
+  X,
+  XCircle,
+} from "lucide-react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useNavigate, useParams, useSearchParams } from "react-router";
 import { type Card as CardT, COLUMN_STATES, type IssueState, ROLE_LABEL, type Role, STATE_LABEL, api, client, unwrap } from "../api/client";
 import { useConnectClaude } from "../components/ConnectClaude";
 import { ImageTextarea } from "../components/ImageTextarea";
-import { Button, ErrorBox, Field, HoldBadge, LabelChip, Modal, Pill, StateBadge, fieldCls, inputCls, timeAgo } from "../components/ui";
+import { Button, ErrorBox, Field, HoldBadge, LabelChip, LiveDot, Modal, Segmented, StateBadge, Switch, TONE, inputCls, selectCls, timeAgo } from "../components/ui";
 
 const PRIORITY_STYLE: Record<string, string> = {
-  P0: "bg-red-600 text-white",
-  P1: "bg-orange-500 text-white",
-  P2: "bg-zinc-300 text-zinc-800 dark:bg-zinc-700 dark:text-zinc-200",
+  P0: "bg-rose-600 text-white",
+  P1: "bg-orange-500/15 text-orange-700 dark:text-orange-300",
+  P2: "bg-surface-3 text-fg-muted",
 };
 
 type Next = CardT["next"];
 
-/** Left accent colour by what happens next. */
-const NEXT_ACCENT: Record<string, string> = {
-  agent: "border-l-blue-500",
-  running: "border-l-blue-500",
-  waiting: "border-l-amber-400",
-  human: "border-l-amber-500",
-  blocked: "border-l-rose-500",
-  parked: "border-l-zinc-300 dark:border-l-zinc-700",
-  done: "border-l-transparent",
+/** Each column's colour, used for its dot and the phone column tabs. */
+const COLUMN_DOT: Record<string, string> = {
+  backlog: "bg-fg-subtle",
+  in_progress: "bg-sky-500",
+  in_review: "bg-indigo-500",
+  done: "bg-emerald-500",
 };
 
 function ConnectChip({ label, title }: { label: string; title: string }) {
   const connect = useConnectClaude();
   return (
     <button
-      className="inline-flex items-center gap-1 rounded text-[11px] font-medium text-rose-600 hover:underline dark:text-rose-400"
+      className={clsx("flex w-full items-center gap-1.5 rounded-lg px-2 py-1 text-left text-[11px] font-medium hover:underline", TONE.red)}
       title={title}
       onClick={(e) => {
         e.stopPropagation();
@@ -53,23 +72,47 @@ function ConnectChip({ label, title }: { label: string; title: string }) {
       }}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <KeyRound size={11} /> {label} · Connect
+      <KeyRound size={12} className="shrink-0" /> <span className="truncate">{label} · Connect</span>
     </button>
+  );
+}
+
+function Banner({ tone, icon, children, action }: { tone: "accent" | "red" | "amber" | "neutral"; icon: ReactNode; children: ReactNode; action?: ReactNode }) {
+  const styles = {
+    accent: "border-accent/20 bg-accent-soft/60",
+    red: "border-rose-500/25 bg-rose-500/8",
+    amber: "border-amber-500/25 bg-amber-500/8",
+    neutral: "border-line bg-surface-2/60",
+  };
+  const iconColor = { accent: "text-accent", red: "text-rose-600 dark:text-rose-400", amber: "text-amber-600 dark:text-amber-400", neutral: "text-fg-subtle" };
+  return (
+    <div className={clsx("flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-3 py-2 text-sm", styles[tone])}>
+      <span className={clsx("shrink-0", iconColor[tone])}>{icon}</span>
+      <div className="min-w-0 flex-1">{children}</div>
+      {action}
+    </div>
   );
 }
 
 function ConnectBanner({ count }: { count: number }) {
   const connect = useConnectClaude();
   return (
-    <div className="mx-4 mt-2 flex flex-wrap items-center gap-2 rounded-md border border-rose-300 bg-rose-50 px-3 py-1.5 text-sm dark:border-rose-900 dark:bg-rose-950/30">
-      <KeyRound size={14} className="text-rose-600" />
-      <span>
+    <Banner
+      tone="red"
+      icon={<KeyRound size={15} />}
+      action={
+        <Button size="sm" variant="primary" onClick={connect}>
+          Connect Claude
+        </Button>
+      }
+    >
+      <span className="sm:hidden">
+        <b>{count}</b> issue{count > 1 ? "s need" : " needs"} Claude connected for containers.
+      </span>
+      <span className="max-sm:hidden">
         <b>{count}</b> issue{count > 1 ? "s are" : " is"} waiting for Claude, which can't sign in inside containers until it's connected.
       </span>
-      <Button size="sm" variant="primary" className="ml-auto" onClick={connect}>
-        Connect Claude
-      </Button>
-    </div>
+    </Banner>
   );
 }
 
@@ -79,134 +122,147 @@ function NextChip({ next, schedulerOn }: { next: Next; schedulerOn: boolean }) {
   const title = [next.detail, next.kind === "agent" && !schedulerOn ? "The scheduler is off, so nothing starts until you turn it on or press Run." : ""]
     .filter(Boolean)
     .join(" ");
-  const base = "inline-flex items-center gap-1 text-[11px] font-medium";
+  const strip = "flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-medium";
+  const text = "flex items-center gap-1.5 px-0.5 text-[11px] font-medium";
   switch (next.kind) {
     case "running":
       return (
-        <span className={clsx(base, "text-blue-600 dark:text-blue-400")} title={title}>
-          <span className="relative flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-blue-500" />
-          </span>
-          {next.label}
-        </span>
+        <div className={clsx(strip, TONE.sky)} title={title}>
+          <LiveDot tone="sky" /> <span className="truncate">{next.label}</span>
+        </div>
       );
     case "agent":
       return (
-        <span className={clsx(base, schedulerOn ? "text-blue-600 dark:text-blue-400" : "text-blue-600/70 dark:text-blue-400/70")} title={title}>
-          <Bot size={12} /> {schedulerOn ? next.label.replace("Next:", "Queued:") : next.label}
-        </span>
+        <div className={clsx(text, schedulerOn ? "text-accent-fg" : "text-fg-subtle")} title={title}>
+          <Bot size={12} className="shrink-0" /> <span className="truncate">{schedulerOn ? next.label.replace("Next:", "Queued:") : next.label}</span>
+        </div>
       );
     case "waiting":
       return (
-        <span className={clsx(base, "text-amber-600 dark:text-amber-400")} title={title}>
-          <Clock size={11} /> {next.label}
-          {until}
-        </span>
+        <div className={clsx(text, "text-amber-700 dark:text-amber-400")} title={title}>
+          <Clock size={12} className="shrink-0" />{" "}
+          <span className="truncate">
+            {next.label}
+            {until}
+          </span>
+        </div>
       );
     case "human":
       return (
-        <span className={clsx(base, "text-amber-700 dark:text-amber-300")} title={title}>
-          <UserRound size={12} /> {next.label}
-        </span>
+        <div className={clsx(strip, TONE.amber)} title={title}>
+          <UserRound size={12} className="shrink-0" /> <span className="truncate">{next.label}</span>
+        </div>
       );
     case "blocked":
       if (next.action === "connect-claude") return <ConnectChip label={next.label} title={title} />;
       return (
-        <span className={clsx(base, "text-rose-600 dark:text-rose-400")} title={title}>
-          <Ban size={11} /> {next.label}
-        </span>
+        <div className={clsx(strip, TONE.red)} title={title}>
+          <Ban size={12} className="shrink-0" /> <span className="truncate">{next.label}</span>
+        </div>
       );
     default:
       return (
-        <span className={clsx(base, "font-normal text-zinc-400 dark:text-zinc-500")} title={title}>
-          <Moon size={11} /> {next.label}
-        </span>
+        <div className={clsx(text, "font-normal text-fg-subtle")} title={title}>
+          <Moon size={11} className="shrink-0" /> <span className="truncate">{next.label}</span>
+        </div>
       );
   }
 }
 
 function CardView({ card, onOpen, dragging, schedulerOn, dim }: { card: CardT; onOpen?: () => void; dragging?: boolean; schedulerOn: boolean; dim?: boolean }) {
-  const hasMeta = card.pr || card.comment_count > 0 || card.failure_count > 0 || card.last_run;
+  const pr = card.pr;
+  const hasMeta = pr || card.comment_count > 0 || card.failure_count > 0 || card.last_run;
+  const live = card.next.kind === "running";
+  const parked = card.next.kind === "parked";
   return (
     <div
       onClick={onOpen}
       className={clsx(
-        "group cursor-pointer rounded-md border border-l-4 bg-white dark:bg-zinc-900 p-2.5 shadow-xs hover:border-zinc-400 dark:hover:border-zinc-600 space-y-1.5 transition-opacity",
-        card.hold === "needs_decision" ? "border-amber-400 dark:border-amber-700" : "border-zinc-200 dark:border-zinc-800",
-        NEXT_ACCENT[card.next.kind],
-        card.next.kind === "parked" && "bg-zinc-50 dark:bg-zinc-900/60",
-        dragging && "shadow-lg rotate-1",
+        "group relative cursor-pointer overflow-hidden rounded-xl border bg-card p-3 shadow-card transition-[border-color,box-shadow,opacity,transform] duration-150 hover:border-line-strong hover:shadow-raised",
+        card.hold === "needs_decision" ? "border-amber-500/50 ring-1 ring-amber-500/15" : live ? "border-sky-500/40 ring-1 ring-sky-500/15" : "border-line",
+        dragging && "rotate-[1.5deg] shadow-overlay",
         dim && "opacity-35",
       )}
     >
-      <div className="flex items-start gap-1.5">
-        <span className="text-xs text-zinc-500 font-mono mt-0.5">#{card.number}</span>
-        <span className={clsx("text-sm leading-snug flex-1", card.next.kind === "parked" && "text-zinc-600 dark:text-zinc-400")}>{card.title}</span>
-        {card.priority && <Pill className={PRIORITY_STYLE[card.priority]}>{card.priority}</Pill>}
+      {live && <div className="live-bar absolute inset-x-0 top-0 h-[3px]" aria-hidden />}
+      <div className="flex items-center gap-1.5 text-[11px] text-fg-subtle">
+        <span className="font-mono tabular-nums">#{card.number}</span>
+        <span className="ml-auto flex items-center gap-1">
+          {card.size && <span className="rounded-md border border-line px-1.5 leading-4 font-medium">{card.size}</span>}
+          {card.priority && <span className={clsx("rounded-md px-1.5 leading-4 font-semibold", PRIORITY_STYLE[card.priority])}>{card.priority}</span>}
+        </span>
       </div>
-      {(card.hold || card.labels.length > 0 || card.size) && (
-        <div className="flex flex-wrap items-center gap-1">
+      <div className={clsx("mt-1 line-clamp-4 text-[13.5px] leading-snug font-medium", parked ? "text-fg-muted" : "text-fg")}>{card.title}</div>
+      {(card.hold || card.labels.length > 0) && (
+        <div className="mt-2 flex flex-wrap items-center gap-1">
           {card.hold && <HoldBadge hold={card.hold} reason={card.hold_reason} />}
           {card.labels.map((l) => (
             <LabelChip key={l.name} {...l} />
           ))}
-          {card.size && <Pill className="bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400">{card.size}</Pill>}
         </div>
       )}
       {hasMeta && (
-        <div className="flex items-center gap-2 text-[11px] text-zinc-500">
-          {card.pr && (
+        <div className="mt-2.5 flex items-center gap-3 text-[11px] text-fg-subtle">
+          {pr && (
             <span
               className={clsx(
-                "inline-flex items-center gap-0.5",
-                card.pr.state === "merged" && "text-violet-600",
-                card.pr.has_conflicts && "text-red-600",
-                card.pr.approved && "text-emerald-600",
+                "inline-flex items-center gap-1 font-medium",
+                pr.state === "merged" ? "text-violet-600 dark:text-violet-400" : pr.has_conflicts ? "text-rose-600 dark:text-rose-400" : pr.approved ? "text-emerald-600 dark:text-emerald-400" : "text-fg-muted",
               )}
-              title={card.pr.has_conflicts ? "Merge conflicts" : card.pr.approved ? "Approved at head" : `PR ${card.pr.state}`}
+              title={pr.has_conflicts ? "Merge conflicts" : pr.approved ? "Approved at head" : `PR ${pr.state}`}
             >
-              {card.pr.state === "merged" ? <GitMerge size={12} /> : <GitPullRequest size={12} />}#{card.pr.number}
-              {card.pr.has_conflicts && <AlertTriangle size={11} />}
-              {card.pr.approved && <Check size={11} />}
-              {card.pr.unresolved_threads > 0 && card.pr.state === "open" && <span title="Unresolved threads">· {card.pr.unresolved_threads}💬</span>}
+              {pr.state === "merged" ? <GitMerge size={12} /> : <GitPullRequest size={12} />}#{pr.number}
+              {pr.has_conflicts && <AlertTriangle size={11} />}
+              {pr.approved && <Check size={11} strokeWidth={3} />}
+            </span>
+          )}
+          {pr && pr.unresolved_threads > 0 && pr.state === "open" && (
+            <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400" title="Unresolved review threads">
+              <MessagesSquare size={11} />
+              {pr.unresolved_threads}
             </span>
           )}
           {card.comment_count > 0 && (
-            <span className="inline-flex items-center gap-0.5">
+            <span className="inline-flex items-center gap-1" title="Comments">
               <MessageSquare size={11} />
               {card.comment_count}
             </span>
           )}
           {card.failure_count > 0 && !card.hold && (
-            <span className="text-rose-600" title={`${card.failure_count} failed run(s)`}>
-              ✗{card.failure_count}
+            <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400" title={`${card.failure_count} failed run(s)`}>
+              <XCircle size={11} />
+              {card.failure_count}
             </span>
           )}
           {card.last_run && card.next.kind !== "running" && <LastRun r={card.last_run} />}
         </div>
       )}
-      <NextChip next={card.next} schedulerOn={schedulerOn} />
+      <div className="mt-2 empty:hidden">
+        <NextChip next={card.next} schedulerOn={schedulerOn} />
+      </div>
     </div>
   );
 }
 
-const LAST_RUN_STYLE: Record<string, [string, string]> = {
-  succeeded: ["✓", "text-emerald-600 dark:text-emerald-400"],
-  failed: ["✗", "text-rose-600 dark:text-rose-400"],
-  rate_limited: ["⏸", "text-amber-600 dark:text-amber-400"],
-  cancelled: ["■", "text-zinc-500"],
-  interrupted: ["↺", "text-zinc-500"],
+const LAST_RUN_STYLE: Record<string, [typeof CheckCircle2, string]> = {
+  succeeded: [CheckCircle2, "text-emerald-600 dark:text-emerald-400"],
+  failed: [XCircle, "text-rose-600 dark:text-rose-400"],
+  rate_limited: [PauseCircle, "text-amber-600 dark:text-amber-400"],
+  cancelled: [Square, "text-fg-subtle"],
+  interrupted: [RotateCcw, "text-fg-subtle"],
 };
 
 function LastRun({ r }: { r: NonNullable<CardT["last_run"]> }) {
   const age = r.ended_at ? (Date.now() - new Date(r.ended_at).getTime()) / 1000 : Infinity;
   if (age > 86400) return null;
-  const [icon, cls] = LAST_RUN_STYLE[r.status] ?? ["•", "text-zinc-500"];
+  const [Icon, cls] = LAST_RUN_STYLE[r.status] ?? [Bot, "text-fg-subtle"];
   const verb = r.status === "succeeded" ? "done" : r.status.replace("_", " ");
   return (
-    <span className={clsx("ml-auto inline-flex items-center gap-1", cls, age > 3600 && "opacity-60")} title={`Run #${r.id} ${r.status}${r.error ? `: ${r.error}` : ""}`}>
-      {icon} {ROLE_LABEL[r.role as Role] ?? r.role} {verb} · {timeAgo(r.ended_at)}
+    <span className={clsx("ml-auto inline-flex min-w-0 items-center gap-1", cls, age > 3600 && "opacity-70")} title={`Run #${r.id} ${r.status}${r.error ? `: ${r.error}` : ""}`}>
+      <Icon size={11} className="shrink-0" />
+      <span className="truncate">
+        {ROLE_LABEL[r.role as Role] ?? r.role} {verb} · {timeAgo(r.ended_at)}
+      </span>
     </span>
   );
 }
@@ -218,10 +274,17 @@ function SortableCard({ card, schedulerOn, spotlight, onOpen }: CardProps & { ca
   return (
     <div
       ref={setNodeRef}
-      className="touch-manipulation select-none [-webkit-touch-callout:none]"
+      className="touch-manipulation rounded-xl select-none [-webkit-touch-callout:none]"
       style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 }}
       {...attributes}
       {...listeners}
+      aria-label={`#${card.number} ${card.title}`}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen(card.number);
+        }
+      }}
     >
       <CardView card={card} onOpen={() => onOpen(card.number)} schedulerOn={schedulerOn} dim={!!spotlight && !spotlight.has(card.number)} />
     </div>
@@ -254,18 +317,19 @@ function SectionView({ section, cards, dragging, ...rest }: CardProps & { sectio
   // Empty sections only appear while dragging, as drop targets.
   if (cards.length === 0 && !dragging) return null;
   return (
-    <div ref={setNodeRef} className={clsx("space-y-2 rounded-md", isOver && "bg-blue-50/70 dark:bg-blue-950/30 outline-2 outline-dashed outline-blue-400")}>
-      <div className="flex items-center gap-1.5 px-1 pt-1 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-        <Icon size={11} className={section.who === "agent" ? "text-blue-500" : section.who === "human" ? "text-amber-500" : ""} />
-        {section.title}
-        <span className="font-normal normal-case tracking-normal text-zinc-400">· {cards.length} · {section.hint}</span>
+    <div ref={setNodeRef} className={clsx("space-y-2 rounded-xl transition-colors", isOver && "bg-accent-soft/70 outline-2 outline-offset-2 outline-accent/50 outline-dashed")}>
+      <div className="flex items-center gap-1.5 px-1 pt-0.5 text-[11px] font-semibold text-fg-muted" title={section.hint}>
+        <Icon size={12} className={clsx("shrink-0", section.who === "agent" ? "text-accent" : section.who === "human" ? "text-amber-500" : "text-fg-subtle")} />
+        <span className="shrink-0 whitespace-nowrap">{section.title}</span>
+        <span className="shrink-0 font-medium text-fg-subtle tabular-nums">{cards.length}</span>
+        <span className="truncate font-normal text-fg-subtle">· {section.hint}</span>
       </div>
       <SortableContext items={cards.map((c) => `card-${c.number}`)} strategy={verticalListSortingStrategy}>
         {cards.map((c) => (
           <SortableCard key={c.number} card={c} {...rest} />
         ))}
       </SortableContext>
-      {cards.length === 0 && <div className="h-10 rounded border border-dashed border-zinc-300 dark:border-zinc-700" />}
+      {cards.length === 0 && <div className="h-12 rounded-xl border border-dashed border-line-strong" />}
     </div>
   );
 }
@@ -274,12 +338,19 @@ function Column({ id, title, cards, dragging, ...rest }: CardProps & { id: strin
   const { setNodeRef, isOver } = useDroppable({ id: `col-${id}`, data: { column: id } });
   const sections = SECTIONS[id];
   return (
-    <div className="flex w-[85vw] max-w-80 shrink-0 snap-start flex-col rounded-lg bg-zinc-100/80 dark:bg-zinc-900/50 md:w-80">
-      <div className="flex items-center gap-2 px-3 py-2 text-sm font-semibold">
-        {title}
-        <span className="rounded-full bg-zinc-200 dark:bg-zinc-800 px-1.5 text-xs font-normal text-zinc-600 dark:text-zinc-400">{cards.length}</span>
+    <div className="flex w-full shrink-0 snap-center snap-always flex-col md:w-[300px] md:rounded-2xl md:border md:border-line/70 md:bg-lane lg:w-auto lg:max-w-[380px] lg:min-w-[272px] lg:flex-1 lg:shrink">
+      <div className="flex items-center gap-2 px-3.5 pt-3 pb-2 max-md:hidden">
+        <span className={clsx("h-2 w-2 rounded-full", COLUMN_DOT[id] ?? "bg-fg-subtle")} />
+        <h2 className="text-[13px] font-semibold tracking-tight">{title}</h2>
+        <span className="text-xs text-fg-subtle tabular-nums">{cards.length}</span>
       </div>
-      <div ref={sections ? undefined : setNodeRef} className={clsx("flex-1 space-y-3 overflow-y-auto px-2 pb-2 min-h-24", !sections && isOver && "bg-blue-50/60 dark:bg-blue-950/20 rounded-b-lg")}>
+      <div
+        ref={sections ? undefined : setNodeRef}
+        className={clsx(
+          "min-h-24 flex-1 space-y-4 overflow-y-auto px-4 pt-1 pb-24 md:px-2 md:pb-2",
+          !sections && isOver && "rounded-b-2xl bg-accent-soft/60",
+        )}
+      >
         {sections ? (
           sections.map((s) => <SectionView key={s.state} section={s} cards={cards.filter((c) => c.state === s.state)} dragging={dragging} {...rest} />)
         ) : (
@@ -291,6 +362,7 @@ function Column({ id, title, cards, dragging, ...rest }: CardProps & { id: strin
             </div>
           </SortableContext>
         )}
+        {cards.length === 0 && !dragging && <div className="py-10 text-center text-xs text-fg-subtle">Nothing here</div>}
       </div>
     </div>
   );
@@ -301,42 +373,48 @@ function DispatchBanner({ board, spotlight, setSpotlight, onOpen }: { board: Non
   const queued = board.dispatchable.map((n) => cards.get(n)).filter((c): c is CardT => !!c);
   if (queued.length === 0) {
     return (
-      <div className="mx-4 mt-2 flex items-center gap-2 text-xs text-zinc-500">
-        <Bot size={13} /> No issues are waiting for an agent{board.scheduler_enabled ? "." : ", so turning on the scheduler won't start anything."} Move issues to Triage or Ready to queue them.
+      <div className="flex items-center gap-2 px-1 text-xs text-fg-subtle max-md:hidden">
+        <Bot size={13} className="shrink-0" /> No issues are waiting for an agent{board.scheduler_enabled ? "." : ", so turning on the scheduler won't start anything."} Move issues to Triage or Ready to queue them.
       </div>
     );
   }
   const slots = Math.max(0, board.max_concurrent_runs - board.active_runs);
   return (
-    <div
-      className={clsx(
-        "mx-4 mt-2 flex flex-wrap items-center gap-2 rounded-md border px-3 py-1.5 text-sm",
-        board.scheduler_enabled ? "border-blue-200 bg-blue-50 dark:border-blue-900 dark:bg-blue-950/30" : "border-zinc-300 bg-white dark:border-zinc-700 dark:bg-zinc-900",
-      )}
+    <Banner
+      tone={board.scheduler_enabled ? "accent" : "neutral"}
+      icon={<Bot size={15} />}
+      action={
+        <label className="flex items-center gap-2 text-xs text-fg-muted">
+          Highlight <Switch size="sm" checked={spotlight} onChange={setSpotlight} label="Highlight queued issues" />
+        </label>
+      }
     >
-      <Bot size={14} className="text-blue-600" />
-      <span>
-        {board.scheduler_enabled ? (
-          <>
-            <b>{queued.length}</b> issue{queued.length > 1 ? "s" : ""} queued for agents ({slots} free slot{slots === 1 ? "" : "s"}):
-          </>
-        ) : (
-          <>
-            Scheduler is off. Turning it on starts agents on <b>{queued.length}</b> issue{queued.length > 1 ? "s" : ""}
-            {queued.length > board.max_concurrent_runs ? ` (${board.max_concurrent_runs} at a time)` : ""}:
-          </>
-        )}
-      </span>
-      {queued.slice(0, 8).map((c) => (
-        <button key={c.number} onClick={() => onOpen(c.number)} className="rounded bg-blue-100 dark:bg-blue-900/50 px-1.5 text-xs text-blue-800 dark:text-blue-200 hover:underline" title={c.title}>
-          #{c.number} {c.next.label.replace("Next: ", "")}
-        </button>
-      ))}
-      {queued.length > 8 && <span className="text-xs text-zinc-500">+{queued.length - 8} more</span>}
-      <label className="flex items-center gap-1 text-xs text-zinc-500 md:ml-auto">
-        <input type="checkbox" checked={spotlight} onChange={(e) => setSpotlight(e.target.checked)} /> highlight
-      </label>
-    </div>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+        <span>
+          {board.scheduler_enabled ? (
+            <>
+              <b>{queued.length}</b> issue{queued.length > 1 ? "s" : ""} queued for agents ({slots} free slot{slots === 1 ? "" : "s"})
+            </>
+          ) : (
+            <>
+              Scheduler is off. Turning it on starts agents on <b>{queued.length}</b> issue{queued.length > 1 ? "s" : ""}
+              {queued.length > board.max_concurrent_runs ? ` (${board.max_concurrent_runs} at a time)` : ""}
+            </>
+          )}
+        </span>
+        {queued.slice(0, 8).map((c) => (
+          <button
+            key={c.number}
+            onClick={() => onOpen(c.number)}
+            className="rounded-md bg-surface/80 px-1.5 py-0.5 text-xs font-medium text-accent-fg ring-1 ring-accent/20 hover:bg-surface"
+            title={c.title}
+          >
+            #{c.number} {c.next.label.replace("Next: ", "")}
+          </button>
+        ))}
+        {queued.length > 8 && <span className="text-xs text-fg-subtle">+{queued.length - 8} more</span>}
+      </div>
+    </Banner>
   );
 }
 
@@ -350,6 +428,13 @@ async function fetchBoard(slug: string, filters: Record<string, unknown>) {
 
 type Drop = { card: CardT; column: string };
 
+const STATE_HINT: Partial<Record<IssueState, string>> = {
+  triage: "A triage agent will look at it",
+  ready: "A fix agent will pick it up",
+  backlog: "Park it; no agent will touch it",
+  done: "Mark completed (cleans up worktree)",
+};
+
 function StatePicker({ drop, onClose, onPick }: { drop: Drop | null; onClose: () => void; onPick: (s: IssueState, reason?: string) => void }) {
   const [reason, setReason] = useState("wontfix");
   if (!drop) return null;
@@ -359,24 +444,26 @@ function StatePicker({ drop, onClose, onPick }: { drop: Drop | null; onClose: ()
       <div className="space-y-2">
         {states.map((s) =>
           s === "closed" ? (
-            <div key={s} className="flex gap-2">
-              <select className={inputCls} value={reason} onChange={(e) => setReason(e.target.value)}>
+            <div key={s} className="flex flex-col gap-2 rounded-xl border border-line p-3 sm:flex-row sm:items-center">
+              <span className="text-sm font-medium sm:flex-1">Close without completing</span>
+              <select className={clsx(inputCls, selectCls, "sm:w-40")} value={reason} onChange={(e) => setReason(e.target.value)} aria-label="Close reason">
                 {["wontfix", "duplicate", "invalid", "not_planned"].map((r) => (
                   <option key={r}>{r}</option>
                 ))}
               </select>
-              <Button onClick={() => onPick("closed", reason)}>Close as {reason}</Button>
+              <Button onClick={() => onPick("closed", reason)} className="justify-center">
+                Close as {reason}
+              </Button>
             </div>
           ) : (
-            <Button key={s} className="w-full justify-start" onClick={() => onPick(s)}>
+            <button
+              key={s}
+              onClick={() => onPick(s)}
+              className="flex w-full items-center gap-3 rounded-xl border border-line bg-surface p-3 text-left transition-colors hover:border-line-strong hover:bg-surface-2"
+            >
               <StateBadge state={s} always />
-              <span className="text-xs text-zinc-500">
-                {s === "triage" && "A triage agent will look at it"}
-                {s === "ready" && "A fix agent will pick it up"}
-                {s === "backlog" && "Park it; no agent will touch it"}
-                {s === "done" && "Mark completed (cleans up worktree)"}
-              </span>
-            </Button>
+              <span className="text-sm text-fg-muted">{STATE_HINT[s]}</span>
+            </button>
           ),
         )}
       </div>
@@ -416,42 +503,56 @@ export function NewIssueModal({ slug, open, onClose }: { slug: string; open: boo
   return (
     <Modal open={open} onClose={onClose} title="New issue" wide>
       <form
-        className="space-y-3"
+        className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault();
           create.mutate();
         }}
       >
-        <Field label="Title">
-          <input autoFocus className={inputCls} value={title} onChange={(e) => setTitle(e.target.value)} />
-        </Field>
-        <Field label="Description (markdown)">
-          <ImageTextarea slug={slug} className={clsx(inputCls, "font-mono h-40")} value={body} onChange={setBody} onPendingChange={setUploading} />
-        </Field>
-        <div className="grid grid-cols-3 gap-3">
+        <input
+          autoFocus
+          aria-label="Title"
+          className="w-full bg-transparent text-lg font-semibold tracking-tight outline-none placeholder:text-fg-subtle"
+          placeholder="Issue title"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+        />
+        <ImageTextarea
+          slug={slug}
+          className={clsx(inputCls, "h-40 resize-y font-mono sm:text-[13px]")}
+          placeholder="Describe the problem (markdown). Paste or drop screenshots."
+          value={body}
+          onChange={setBody}
+          onPendingChange={setUploading}
+        />
+        <div className="grid gap-4 sm:grid-cols-[1fr_auto_auto]">
           <Field label="Labels (comma-separated)">
             <input className={inputCls} value={labels} onChange={(e) => setLabels(e.target.value)} />
           </Field>
-          <Field label="Priority">
-            <select className={inputCls} value={priority} onChange={(e) => setPriority(e.target.value)}>
-              <option value="">—</option>
-              <option>P0</option>
-              <option>P1</option>
-              <option>P2</option>
-            </select>
-          </Field>
-          <Field label="Start in">
-            <select className={inputCls} value={state} onChange={(e) => setState(e.target.value as IssueState)}>
-              {(["triage", "backlog", "ready"] as IssueState[]).map((s) => (
-                <option key={s} value={s}>
-                  {STATE_LABEL[s]}
-                </option>
-              ))}
-            </select>
-          </Field>
+          <div className="space-y-1.5">
+            <span className="block text-xs font-medium text-fg-muted">Priority</span>
+            <Segmented
+              label="Priority"
+              value={priority}
+              onChange={setPriority}
+              options={[
+                { value: "", label: "None" },
+                { value: "P0", label: "P0" },
+                { value: "P1", label: "P1" },
+                { value: "P2", label: "P2" },
+              ]}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <span className="block text-xs font-medium text-fg-muted">Start in</span>
+            <Segmented label="Start in" value={state} onChange={setState} options={(["triage", "backlog", "ready"] as IssueState[]).map((s) => ({ value: s, label: STATE_LABEL[s] }))} />
+          </div>
         </div>
         <ErrorBox error={create.error} />
-        <div className="flex justify-end">
+        <div className="flex items-center justify-end gap-2 border-t border-line pt-4">
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
           <Button variant="primary" disabled={!title.trim() || create.isPending || uploading}>
             Create issue
           </Button>
@@ -463,6 +564,47 @@ export function NewIssueModal({ slug, open, onClose }: { slug: string; open: boo
 
 const BADGES = ["triage", "ready", "changes_requested", "merge_conflict", "ready_to_merge", "needs_decision", "stalled", "paused", "closed"];
 
+function FilterSelect({ value, onChange, children, label }: { value?: string; onChange: (v?: string) => void; children: ReactNode; label: string }) {
+  return (
+    <select
+      aria-label={label}
+      className={clsx(
+        selectCls,
+        "h-8 max-w-44 shrink-0 rounded-lg border pl-3 text-base font-medium shadow-card outline-none transition-colors sm:text-[13px]",
+        value ? "border-accent/30 bg-accent-soft text-accent-fg" : "border-line bg-surface text-fg-muted hover:text-fg",
+      )}
+      value={value ?? ""}
+      onChange={(e) => onChange(e.target.value || undefined)}
+    >
+      {children}
+    </select>
+  );
+}
+
+function BoardSkeleton() {
+  return (
+    <>
+      {[3, 2, 4, 3].map((n, i) => (
+        <div key={i} className="flex w-full shrink-0 flex-col gap-2 px-4 max-md:[&:not(:first-child)]:hidden md:w-[300px] md:rounded-2xl md:border md:border-line/70 md:bg-lane md:p-2 lg:w-auto lg:max-w-[380px] lg:min-w-[272px] lg:flex-1">
+          <div className="mx-1.5 my-2 h-3 w-24 animate-pulse rounded-full bg-surface-3 max-md:hidden" />
+          {Array.from({ length: n }, (_, j) => (
+            <div key={j} className="space-y-2.5 rounded-xl border border-line bg-card p-3">
+              <div className="h-2.5 w-10 animate-pulse rounded-full bg-surface-3" />
+              <div className="h-3 w-11/12 animate-pulse rounded-full bg-surface-3" />
+              <div className="h-3 w-2/3 animate-pulse rounded-full bg-surface-3" />
+            </div>
+          ))}
+        </div>
+      ))}
+    </>
+  );
+}
+
+function isTyping(el: EventTarget | null) {
+  if (!(el instanceof HTMLElement)) return false;
+  return el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName);
+}
+
 export default function BoardPage() {
   const { slug = "" } = useParams();
   const nav = useNavigate();
@@ -473,6 +615,10 @@ export default function BoardPage() {
   const [drop, setDrop] = useState<Drop | null>(null);
   const [active, setActive] = useState<CardT | null>(null);
   const [moveError, setMoveError] = useState<unknown>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [activeCol, setActiveCol] = useState(0);
+  const scroller = useRef<HTMLDivElement>(null);
+  const search = useRef<HTMLInputElement>(null);
   const filters = {
     label: sp.get("label") || undefined,
     badge: sp.get("badge") || undefined,
@@ -493,7 +639,6 @@ export default function BoardPage() {
     useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 300, tolerance: 8 } }),
   );
-  const [showFilters, setShowFilters] = useState(false);
 
   const transition = useMutation({
     mutationFn: ({ n, to, reason }: { n: number; to: IssueState; reason?: string }) =>
@@ -512,10 +657,32 @@ export default function BoardPage() {
     return m;
   }, [board.data]);
 
+  // Desktop shortcuts: "/" focuses search, "c" starts a new issue.
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target) || document.querySelector('[aria-modal="true"]')) return;
+      if (e.key === "/") {
+        e.preventDefault();
+        search.current?.focus();
+      } else if (e.key === "c") {
+        e.preventDefault();
+        setNewOpen(true);
+      }
+    };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, []);
+
   const setFilter = (k: string, v?: string) => {
     const next = new URLSearchParams(sp);
     if (v) next.set(k, v);
     else next.delete(k);
+    setSp(next, { replace: true });
+  };
+  const clearFilters = () => {
+    const next = new URLSearchParams(sp);
+    for (const k of ["label", "badge", "agent", "running", "q"]) next.delete(k);
+    setQ("");
     setSp(next, { replace: true });
   };
 
@@ -551,81 +718,169 @@ export default function BoardPage() {
   };
 
   const activeFilters = [filters.label, filters.badge, filters.agent, filters.running].filter(Boolean).length;
-  const needsConnect = board.data?.columns.flatMap((c) => c.cards).filter((c) => c.next.action === "connect-claude").length ?? 0;
+  const allCards = board.data?.columns.flatMap((c) => c.cards) ?? [];
+  const needsConnect = allCards.filter((c) => c.next.action === "connect-claude").length;
   const openCard = (n: number) => nav(`/p/${slug}/issues/${n}${window.location.search}`);
   const labels = board.data?.labels ?? [];
   const pausedGroups = board.data?.limit_groups.filter((g) => g.paused) ?? [];
+  const running = allCards.filter((c) => c.next.kind === "running").length;
+  const columns = board.data?.columns ?? [];
+
+  const filterControls = (
+    <>
+      <FilterSelect label="Label" value={filters.label} onChange={(v) => setFilter("label", v)}>
+        <option value="">All labels</option>
+        {labels.map((l) => (
+          <option key={l.name}>{l.name}</option>
+        ))}
+      </FilterSelect>
+      <FilterSelect label="State" value={filters.badge} onChange={(v) => setFilter("badge", v)}>
+        <option value="">All states</option>
+        {BADGES.map((b) => (
+          <option key={b} value={b}>
+            {b.charAt(0).toUpperCase() + b.slice(1).replace(/_/g, " ")}
+          </option>
+        ))}
+      </FilterSelect>
+      <FilterSelect label="Agent" value={filters.agent} onChange={(v) => setFilter("agent", v)}>
+        <option value="">Any agent</option>
+        {agents.data?.map((a) => (
+          <option key={a.slug} value={a.slug}>
+            {a.name}
+          </option>
+        ))}
+      </FilterSelect>
+      <button
+        type="button"
+        aria-pressed={!!filters.running}
+        onClick={() => setFilter("running", filters.running ? undefined : "1")}
+        className={clsx(
+          "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-3 text-[13px] font-medium shadow-card transition-colors",
+          filters.running ? "border-sky-500/30 bg-sky-500/12 text-sky-700 dark:text-sky-300" : "border-line bg-surface text-fg-muted hover:text-fg",
+        )}
+      >
+        {filters.running ? <LiveDot tone="sky" /> : <span className="h-2 w-2 rounded-full border border-current" />}
+        Running
+      </button>
+    </>
+  );
+
+  const selectColumn = (i: number) => {
+    const el = scroller.current;
+    if (el) el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
+    setActiveCol(i);
+  };
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200 dark:border-zinc-800 px-3 py-2 md:px-4">
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center gap-2 px-4 pt-3 pb-3 md:gap-3 md:px-6 md:pt-5">
+        <div className="mr-2 hidden min-w-0 items-baseline gap-2 md:flex">
+          <h1 className="text-lg font-semibold tracking-tight">Board</h1>
+          {board.data && (
+            <span className="text-sm whitespace-nowrap text-fg-subtle tabular-nums">
+              {allCards.length} issues{running > 0 ? ` · ${running} running` : ""}
+            </span>
+          )}
+        </div>
         <form
           onSubmit={(e) => {
             e.preventDefault();
             setFilter("q", q || undefined);
           }}
-          className="relative min-w-0 flex-1 md:flex-none"
+          className="relative min-w-0 flex-1 md:max-w-64 md:flex-none"
         >
-          <Search size={13} className="absolute left-2 top-2 text-zinc-400" />
-          <input className={clsx(fieldCls, "pl-7 w-full md:w-56 py-1")} placeholder="Search or #number" value={q} onChange={(e) => setQ(e.target.value)} />
+          <Search size={15} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-fg-subtle" />
+          <input
+            ref={search}
+            type="search"
+            className="h-9 w-full rounded-lg border border-line bg-surface pr-8 pl-9 text-base shadow-card outline-none placeholder:text-fg-subtle focus:border-accent/60 focus:ring-3 focus:ring-accent/15 md:h-8 md:text-[13px]"
+            placeholder="Search or #number"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+          {!q && <kbd className="pointer-events-none absolute top-1/2 right-2 hidden -translate-y-1/2 rounded border border-line px-1.5 font-mono text-[10px] text-fg-subtle md:block">/</kbd>}
         </form>
-        <Button className="md:hidden" onClick={() => setShowFilters((v) => !v)} title="Filters">
-          <SlidersHorizontal size={14} />
-          {activeFilters > 0 && <span className="rounded-full bg-blue-600 px-1.5 text-[10px] leading-4 text-white">{activeFilters}</span>}
+        <Button className="relative md:hidden" icon onClick={() => setFiltersOpen(true)} aria-label="Filters" title="Filters">
+          <SlidersHorizontal size={16} />
+          {activeFilters > 0 && <span className="absolute -top-1 -right-1 grid h-4 min-w-4 place-items-center rounded-full bg-accent px-1 text-[10px] leading-none text-white">{activeFilters}</span>}
         </Button>
-        <Button variant="primary" className="md:hidden" onClick={() => setNewOpen(true)} title="New issue">
-          <Plus size={14} />
-        </Button>
-        <div className={clsx("flex w-full flex-wrap items-center gap-2 md:contents", !showFilters && "max-md:hidden")}>
-        <select className={clsx(fieldCls, " py-1")} value={filters.label ?? ""} onChange={(e) => setFilter("label", e.target.value)}>
-          <option value="">All labels</option>
-          {labels.map((l) => (
-            <option key={l.name}>{l.name}</option>
-          ))}
-        </select>
-        <select className={clsx(fieldCls, " py-1")} value={filters.badge ?? ""} onChange={(e) => setFilter("badge", e.target.value)}>
-          <option value="">All states</option>
-          {BADGES.map((b) => (
-            <option key={b} value={b}>
-              {b.replace(/_/g, " ")}
-            </option>
-          ))}
-        </select>
-        <select className={clsx(fieldCls, " py-1")} value={filters.agent ?? ""} onChange={(e) => setFilter("agent", e.target.value)}>
-          <option value="">Any agent</option>
-          {agents.data?.map((a) => (
-            <option key={a.slug} value={a.slug}>
-              {a.name}
-            </option>
-          ))}
-        </select>
-        <label className="flex items-center gap-1 text-sm text-zinc-600 dark:text-zinc-400">
-          <input type="checkbox" checked={!!filters.running} onChange={(e) => setFilter("running", e.target.checked ? "1" : undefined)} />
-          Running
-        </label>
-        </div>
-        {pausedGroups.map((g) => (
-          <Pill key={g.name} className="bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300" title={g.pause_reason ?? ""}>
-            <Clock size={11} /> {g.name} paused{g.paused_until ? ` · resumes ${timeAgo(g.paused_until)}` : ""}
-          </Pill>
-        ))}
+        <div className="hidden flex-wrap items-center gap-2 md:flex">{filterControls}</div>
+        {(activeFilters > 0 || filters.q) && (
+          <Button variant="ghost" size="sm" onClick={clearFilters} className="max-md:hidden">
+            <X size={13} /> Clear
+          </Button>
+        )}
         <div className="ml-auto hidden md:block">
-          <Button variant="primary" onClick={() => setNewOpen(true)}>
-            <Plus size={14} /> New issue
+          <Button variant="primary" onClick={() => setNewOpen(true)} title="New issue (c)">
+            <Plus size={16} /> New issue
           </Button>
         </div>
       </div>
-      {moveError ? (
-        <div className="px-4 pt-2" onClick={() => setMoveError(null)}>
-          <ErrorBox error={moveError} />
+
+      {/* Banners */}
+      {board.data && (
+        <div className={clsx("space-y-2 px-4 pb-3 md:px-6", !moveError && needsConnect === 0 && pausedGroups.length === 0 && board.data.dispatchable.length === 0 && "max-md:hidden")}>
+          {moveError ? (
+            <div onClick={() => setMoveError(null)}>
+              <ErrorBox error={moveError} />
+            </div>
+          ) : null}
+          {needsConnect > 0 && <ConnectBanner count={needsConnect} />}
+          {pausedGroups.length > 0 && (
+            <Banner tone="amber" icon={<Clock size={15} />}>
+              {pausedGroups.map((g) => (
+                <span key={g.name} className="mr-3 inline-block" title={g.pause_reason ?? ""}>
+                  <b>{g.name}</b> is paused{g.paused_until ? ` · resumes ${timeAgo(g.paused_until)}` : ""}
+                </span>
+              ))}
+            </Banner>
+          )}
+          <DispatchBanner board={board.data} spotlight={spotlightOn} setSpotlight={setSpotlightOn} onOpen={openCard} />
         </div>
-      ) : null}
-      <ErrorBox error={board.error} />
-      {board.data && needsConnect > 0 && <ConnectBanner count={needsConnect} />}
-      {board.data && <DispatchBanner board={board.data} spotlight={spotlightOn} setSpotlight={setSpotlightOn} onOpen={openCard} />}
-      <div className={clsx("flex min-h-0 flex-1 gap-3 overflow-x-auto p-3 md:p-4", !active && "max-md:snap-x max-md:snap-mandatory max-md:scroll-px-3")}>
+      )}
+      <div className="px-4 md:px-6">
+        <ErrorBox error={board.error} />
+      </div>
+
+      {/* Phone column tabs */}
+      {columns.length > 0 && (
+        <div className="px-4 pb-3 md:hidden">
+          <div className="grid rounded-xl bg-surface-3/70 p-1" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }} role="tablist" aria-label="Columns">
+            {columns.map((c, i) => (
+              <button
+                key={c.id}
+                role="tab"
+                aria-selected={activeCol === i}
+                onClick={() => selectColumn(i)}
+                className={clsx(
+                  "flex min-w-0 flex-col items-center rounded-lg px-1 py-1.5 transition-colors",
+                  activeCol === i ? "bg-surface text-fg shadow-card" : "text-fg-muted",
+                )}
+              >
+                <span className="flex max-w-full items-center gap-1 text-[12px] font-medium">
+                  <span className={clsx("h-1.5 w-1.5 shrink-0 rounded-full", COLUMN_DOT[c.id])} />
+                  <span className="truncate">{c.title}</span>
+                </span>
+                <span className="text-[11px] text-fg-subtle tabular-nums">{c.cards.length}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Columns */}
+      <div
+        ref={scroller}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          if (el.clientWidth && window.matchMedia("(max-width: 767px)").matches) setActiveCol(Math.round(el.scrollLeft / el.clientWidth));
+        }}
+        className={clsx("flex min-h-0 flex-1 overflow-x-auto max-md:no-scrollbar md:gap-4 md:px-6 md:pb-6", !active && "max-md:snap-x max-md:snap-mandatory")}
+      >
+        {board.isLoading && <BoardSkeleton />}
         <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setActive(null)}>
-          {board.data?.columns.map((c) => (
+          {columns.map((c) => (
             <Column
               key={c.id}
               id={c.id}
@@ -640,6 +895,36 @@ export default function BoardPage() {
           <DragOverlay>{active ? <CardView card={active} dragging schedulerOn={!!board.data?.scheduler_enabled} /> : null}</DragOverlay>
         </DndContext>
       </div>
+
+      {/* Phone: new issue */}
+      <button
+        onClick={() => setNewOpen(true)}
+        className="fixed right-4 bottom-[calc(4.75rem+env(safe-area-inset-bottom))] z-30 grid h-14 w-14 place-items-center rounded-2xl bg-accent text-white shadow-overlay inset-shadow-[inset_0_1px_0_rgb(255_255_255/0.2)] transition-transform active:scale-95 md:hidden"
+        aria-label="New issue"
+      >
+        <Plus size={26} />
+      </button>
+
+      <Modal open={filtersOpen} onClose={() => setFiltersOpen(false)} title="Filters">
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 gap-3 [&>select]:h-11 [&>select]:max-w-none [&>button]:h-11">{filterControls}</div>
+          <div className="flex gap-2">
+            <Button
+              className="flex-1 justify-center"
+              onClick={() => {
+                clearFilters();
+                setFiltersOpen(false);
+              }}
+              disabled={activeFilters === 0 && !filters.q}
+            >
+              Clear all
+            </Button>
+            <Button variant="primary" className="flex-1 justify-center" onClick={() => setFiltersOpen(false)}>
+              Done
+            </Button>
+          </div>
+        </div>
+      </Modal>
       <StatePicker
         drop={drop}
         onClose={() => setDrop(null)}

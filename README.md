@@ -70,8 +70,9 @@ merge a PR into `main` — no terminal needed, including from a phone: it shows 
 you're behind, streams the `npm run build` / `cargo build --release` log, and only restarts if the
 build succeeds. Restart now (active runs resume after) or once the active ones finish.
 
-The scheduler starts **off**. Turn it on with the switch in the header, or pass
-`serve --scheduler`. Until then, agents only run when you press **Run** on an issue.
+The scheduler starts **off**. Turn it on with the switch at the bottom of the sidebar (in the
+**More** menu on phones), or pass `serve --scheduler`. Until then, agents only run when you press
+**Run agent now** on an issue.
 
 Before the first real run, open **Agents** and press **Test** on each agent. Test checks the
 adapter starts and completes the ACP handshake; **+ prompt** also checks that the
@@ -239,7 +240,7 @@ Auth works like this:
 ## Containers
 
 Agents only run in Docker containers. A project without a container gets no agent runs: its
-cards say **Needs a container**, and **Run** is refused. To let agents run directly on this
+cards say **Needs a container**, and **Run agent now** is refused. To let agents run directly on this
 machine instead, with your user's files, keys and network, start the server with
 `serve --dangerously-allow-host-agents`. That's meant for when the server itself is already
 sandboxed, such as a test server inside an agent's container. The board server itself runs on

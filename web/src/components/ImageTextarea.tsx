@@ -142,7 +142,7 @@ export function ImageTextarea({
           type="button"
           title="Attach a photo"
           onClick={() => fileInput.current?.click()}
-          className="absolute bottom-1.5 right-1.5 rounded-md border border-zinc-300 dark:border-zinc-700 bg-white/90 dark:bg-zinc-900/90 p-1.5 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+          className="absolute right-2 bottom-2 grid h-7 w-7 place-items-center rounded-lg border border-line bg-surface/90 text-fg-subtle shadow-card backdrop-blur hover:text-fg"
         >
           <ImagePlus size={14} />
         </button>
@@ -159,11 +159,11 @@ export function ImageTextarea({
         />
       </div>
       {pending > 0 && (
-        <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+        <div className="flex items-center gap-1.5 text-xs text-fg-subtle">
           <Spinner /> Uploading image{pending > 1 ? "s" : ""}…
         </div>
       )}
-      {error && <div className="text-xs text-rose-600">{error}</div>}
+      {error && <div className="text-xs text-rose-600 dark:text-rose-400">{error}</div>}
     </div>
   );
 }

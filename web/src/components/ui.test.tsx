@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
-import { Markdown, fieldCls, inputCls } from "./ui";
+import { useState } from "react";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { Markdown, Segmented, Switch, fieldCls, fieldSmCls, inputCls } from "./ui";
 
 /**
  * iOS Safari zooms the page in on focus when an editable element computes to
@@ -19,6 +20,64 @@ describe("shared form field classes", () => {
 
   test("fieldCls does not trigger iOS Safari focus zoom on phones", () => {
     assertNoMobileZoomFont(fieldCls);
+  });
+
+  test("fieldSmCls does not trigger iOS Safari focus zoom on phones", () => {
+    assertNoMobileZoomFont(fieldSmCls);
+  });
+});
+
+describe("Switch", () => {
+  afterEach(cleanup);
+
+  test("is a named switch that reports and flips its state", () => {
+    const onChange = vi.fn();
+    render(<Switch checked={false} onChange={onChange} label="Scheduler" />);
+    const sw = screen.getByRole("switch", { name: "Scheduler" });
+    expect(sw.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(sw);
+    expect(onChange).toHaveBeenCalledWith(true);
+  });
+
+  test("never submits an enclosing form", () => {
+    const onSubmit = vi.fn((e: { preventDefault: () => void }) => e.preventDefault());
+    render(
+      <form onSubmit={onSubmit}>
+        <Switch checked onChange={() => {}} label="Follow" />
+      </form>,
+    );
+    fireEvent.click(screen.getByRole("switch", { name: "Follow" }));
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+});
+
+describe("Segmented", () => {
+  afterEach(cleanup);
+
+  function Harness() {
+    const [v, setV] = useState<number | null>(30);
+    return (
+      <Segmented
+        label="Range"
+        value={v}
+        onChange={setV}
+        options={[
+          { value: 7, label: "7d" },
+          { value: 30, label: "30d" },
+          { value: null, label: "All" },
+        ]}
+      />
+    );
+  }
+
+  test("marks exactly the selected option as pressed and follows clicks, including a null value", () => {
+    render(<Harness />);
+    const pressed = () => screen.getAllByRole("button").filter((b) => b.getAttribute("aria-pressed") === "true").map((b) => b.textContent);
+    expect(pressed()).toEqual(["30d"]);
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    expect(pressed()).toEqual(["All"]);
+    fireEvent.click(screen.getByRole("button", { name: "7d" }));
+    expect(pressed()).toEqual(["7d"]);
   });
 });
 

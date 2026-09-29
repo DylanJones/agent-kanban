@@ -31,6 +31,11 @@ export function applyTheme(pref: ThemePreference) {
   const root = document.documentElement;
   root.classList.toggle("dark", effective === "dark");
   root.style.colorScheme = effective;
+  // Phone browser chrome (and home-screen apps) take their colour from theme-color; match the
+  // chosen theme rather than the OS one. Keep in sync with --canvas in index.css.
+  for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
+    meta.content = effective === "dark" ? "#0b0b0e" : "#f6f6f8";
+  }
 }
 
 export function useThemePreference(): [ThemePreference, (pref: ThemePreference) => void] {

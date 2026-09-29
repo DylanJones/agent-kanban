@@ -1,30 +1,60 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Square } from "lucide-react";
+import { ArrowLeft, ArrowUp, Box, CheckCircle2, CircleSlash, Clock, Cpu, Folder, GitPullRequest, Loader2, PauseCircle, RotateCcw, Square, Terminal, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import { ROLE_LABEL, type RunEvent, type RunView, api, client, unwrap } from "../api/client";
-import { Transcript } from "../components/Transcript";
-import { fmtTokens } from "./Usage";
 import { summarizeSettings } from "../components/SessionSettings";
-import { Button, Empty, ErrorBox, Pill, TimeAgo, fmtDur, fieldCls, inputCls } from "../components/ui";
+import { Transcript } from "../components/Transcript";
+import { Button, EmptyState, ErrorBox, LiveDot, Page, PageHeader, Pill, Segmented, Switch, TimeAgo, type Tone, fmtDur } from "../components/ui";
+import { fmtTokens } from "./Usage";
 
-export const RUN_STATUS_STYLE: Record<string, string> = {
-  queued: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
-  preparing: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300",
-  running: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300",
-  succeeded: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
-  failed: "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300",
-  cancelled: "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
-  rate_limited: "bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300",
-  interrupted: "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
+const RUN_STATUS_TONE: Record<string, Tone> = {
+  queued: "neutral",
+  preparing: "sky",
+  running: "sky",
+  succeeded: "green",
+  failed: "red",
+  cancelled: "neutral",
+  rate_limited: "amber",
+  interrupted: "neutral",
 };
+
+const STATUS_ICON: Record<string, [typeof CheckCircle2, string]> = {
+  succeeded: [CheckCircle2, "text-emerald-500"],
+  failed: [XCircle, "text-rose-500"],
+  rate_limited: [PauseCircle, "text-amber-500"],
+  cancelled: [CircleSlash, "text-fg-subtle"],
+  interrupted: [RotateCcw, "text-fg-subtle"],
+  queued: [Clock, "text-fg-subtle"],
+};
+
+function isLive(status: string) {
+  return ["preparing", "running"].includes(status);
+}
+
+function RunStatusIcon({ status, size = 32 }: { status: string; size?: number }) {
+  const [Icon, color] = STATUS_ICON[status] ?? [Loader2, "text-sky-500"];
+  return (
+    <span className={clsx("grid shrink-0 place-items-center rounded-full border", isLive(status) ? "border-sky-500/30 bg-sky-500/10" : "border-line bg-surface-2")} style={{ width: size, height: size }}>
+      {isLive(status) ? <Loader2 size={size * 0.5} className="animate-spin text-sky-500" /> : <Icon size={size * 0.5} className={color} />}
+    </span>
+  );
+}
 
 function duration(r: RunView) {
   if (!r.started_at) return "";
   const end = r.ended_at ? new Date(r.ended_at).getTime() : Date.now();
   return fmtDur((end - new Date(r.started_at).getTime()) / 1000);
 }
+
+const FILTERS = [
+  { value: "", label: "All" },
+  { value: "active", label: "Active" },
+  { value: "failed", label: "Failed" },
+  { value: "rate_limited", label: "Rate limited" },
+  { value: "succeeded", label: "Succeeded" },
+];
 
 export function RunsPage() {
   const [status, setStatus] = useState("");
@@ -34,51 +64,53 @@ export function RunsPage() {
     refetchInterval: 10000,
   });
   return (
-    <div className="mx-auto max-w-6xl p-3 space-y-4 md:p-6">
-      <div className="flex items-center gap-3">
-        <h1 className="text-xl font-semibold">Agent runs</h1>
-        <select className={clsx(fieldCls, " py-1")} value={status} onChange={(e) => setStatus(e.target.value)}>
-          <option value="">All</option>
-          <option value="active">Active</option>
-          <option value="failed">Failed</option>
-          <option value="rate_limited">Rate limited</option>
-          <option value="succeeded">Succeeded</option>
-        </select>
-      </div>
+    <Page width="xl">
+      <PageHeader title="Runs" subtitle="Every agent session across your projects, newest first." actions={<Segmented label="Status" value={status} onChange={setStatus} options={FILTERS} />} />
       <ErrorBox error={runs.error} />
-      <div className="rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 divide-y divide-zinc-100 dark:divide-zinc-800">
-        {runs.data?.length === 0 && <Empty>No runs yet. Turn on the scheduler or start a run from an issue.</Empty>}
-        {runs.data?.map((r) => (
-          // Wide screens: one row per run. Narrow: id, status, role, agent and numbers, then the issue, then the outcome.
-          <Link
-            key={r.id}
-            to={`/runs/${r.id}`}
-            className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-2 md:gap-x-3 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800/50 md:flex-nowrap"
-          >
-            <span className="font-mono text-xs text-zinc-500 md:w-12">#{r.id}</span>
-            <Pill className={RUN_STATUS_STYLE[r.status]}>{r.status.replace("_", " ")}</Pill>
-            <span className="text-xs md:w-20">{ROLE_LABEL[r.role]}</span>
-            <span className="text-xs text-zinc-500 md:w-20">{r.agent}</span>
-            <span className="min-w-0 truncate max-md:order-2 max-md:basis-full md:flex-1">
-              <span className="text-zinc-500">
-                {r.project} #{r.issue}
-              </span>{" "}
-              {r.issue_title}
-            </span>
-            {(r.error ?? r.outcome) && (
-              <span className="min-w-0 truncate text-xs text-zinc-500 max-md:order-3 max-md:basis-full md:max-w-72">{r.error ?? r.outcome}</span>
-            )}
-            <span className="text-right text-xs text-zinc-500 tabular-nums max-md:ml-auto md:w-14" title="tokens">
-              {r.total_tokens > 0 ? fmtTokens(r.total_tokens) : ""}
-            </span>
-            <span className="text-right text-xs text-zinc-500 max-md:hidden md:w-14">{duration(r)}</span>
-            <span className="whitespace-nowrap text-right text-xs text-zinc-500 md:w-20">
-              <TimeAgo iso={r.created_at} />
-            </span>
-          </Link>
-        ))}
+      <div className="overflow-hidden rounded-xl border border-line bg-surface shadow-card">
+        {runs.data?.length === 0 && (
+          <EmptyState icon={<Terminal size={20} />} title="No runs yet">
+            Turn on the scheduler or start a run from an issue.
+          </EmptyState>
+        )}
+        <div className="divide-y divide-line">
+          {runs.data?.map((r) => (
+            <Link key={r.id} to={`/runs/${r.id}`} className="group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-surface-2/60 sm:gap-4">
+              <RunStatusIcon status={r.status} />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="truncate text-sm font-medium">{r.issue_title ?? `Issue #${r.issue}`}</span>
+                  {r.status !== "succeeded" && (
+                    <Pill tone={RUN_STATUS_TONE[r.status]} className="shrink-0">
+                      {isLive(r.status) && <LiveDot tone="sky" className="scale-75" />}
+                      {r.status.replace("_", " ")}
+                    </Pill>
+                  )}
+                </div>
+                <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-fg-subtle">
+                  <span className="shrink-0 font-mono">#{r.id}</span>
+                  <span>·</span>
+                  <span className="shrink-0 font-medium text-fg-muted">{ROLE_LABEL[r.role]}</span>
+                  <span>·</span>
+                  <span className="shrink-0">{r.agent}</span>
+                  <span className="max-sm:hidden">·</span>
+                  <span className="shrink-0 max-sm:hidden">
+                    {r.project} #{r.issue}
+                  </span>
+                  {(r.error ?? r.outcome) && <span className="min-w-0 truncate max-md:hidden">— {r.error ?? r.outcome}</span>}
+                </div>
+              </div>
+              <div className="flex shrink-0 flex-col items-end gap-0.5 text-xs text-fg-subtle tabular-nums">
+                <TimeAgo iso={r.created_at} />
+                <span className="max-sm:hidden">
+                  {[r.total_tokens > 0 ? `${fmtTokens(r.total_tokens)} tok` : "", duration(r)].filter(Boolean).join(" · ")}
+                </span>
+              </div>
+            </Link>
+          ))}
+        </div>
       </div>
-    </div>
+    </Page>
   );
 }
 
@@ -97,6 +129,15 @@ export function useRunTranscript(id: number) {
     return () => es.close();
   }, [id]);
   return useMemo(() => [...events.values()].sort((a, b) => a.seq - b.seq), [events]);
+}
+
+function MetaChip({ icon: Icon, children, title, className }: { icon: typeof Box; children: React.ReactNode; title?: string; className?: string }) {
+  return (
+    <span title={title} className={clsx("inline-flex min-w-0 items-center gap-1.5 rounded-md bg-surface-3/70 px-2 py-0.5 text-[11px] text-fg-muted", className)}>
+      <Icon size={12} className="shrink-0 text-fg-subtle" />
+      <span className="truncate">{children}</span>
+    </span>
+  );
 }
 
 export function RunDetail() {
@@ -127,77 +168,114 @@ export function RunDetail() {
   const agents = useQuery({ queryKey: ["agents"], queryFn: () => unwrap(client.GET("/api/agents")) });
   const settings = r ? summarizeSettings(agents.data?.find((a) => a.slug === r.agent), r.session_config as Record<string, unknown> | null) : "";
   return (
-    <div className="mx-auto max-w-4xl p-3 space-y-4 md:p-6">
-      <ErrorBox error={run.error} />
+    <div className="flex min-h-full flex-col">
       {r && (
-        <div className="sticky top-0 z-10 -mx-3 -mt-3 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/95 dark:bg-zinc-950/95 px-3 py-2 backdrop-blur space-y-1 md:-mx-6 md:-mt-6 md:px-6 md:py-3">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <h1 className="text-lg font-semibold whitespace-nowrap">
-              {ROLE_LABEL[r.role]} run #{r.id}
-            </h1>
-            <Pill className={RUN_STATUS_STYLE[r.status]}>{r.status.replace("_", " ")}</Pill>
-            <span className="min-w-0 text-sm text-zinc-500 max-md:order-last max-md:basis-full max-md:truncate">
-              {r.agent} on{" "}
-              <Link to={`/p/${r.project}/issues/${r.issue}`} className="text-blue-600">
-                #{r.issue} {r.issue_title}
+        <header className="sticky top-0 z-10 border-b border-line bg-surface/85 backdrop-blur-xl">
+          <div className="mx-auto w-full max-w-4xl space-y-2 px-4 py-3 sm:px-6">
+            <div className="flex items-center gap-3">
+              <Link to="/runs" className="-ml-1.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg text-fg-muted hover:bg-surface-2 hover:text-fg" aria-label="All runs">
+                <ArrowLeft size={17} />
               </Link>
-              {r.pr && (
-                <>
-                  {" "}
-                  ·{" "}
-                  <Link to={`/p/${r.project}/pulls/${r.pr}`} className="text-blue-600">
-                    PR #{r.pr}
+              <RunStatusIcon status={r.status} size={30} />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                  <h1 className="text-[15px] font-semibold tracking-tight whitespace-nowrap sm:text-base">
+                    {ROLE_LABEL[r.role]} run <span className="font-normal text-fg-subtle">#{r.id}</span>
+                  </h1>
+                  <Pill tone={RUN_STATUS_TONE[r.status]}>{r.status.replace("_", " ")}</Pill>
+                  <span className="text-xs text-fg-subtle tabular-nums">{duration(r)}</span>
+                </div>
+                <div className="truncate text-xs text-fg-muted">
+                  {r.agent} on{" "}
+                  <Link to={`/p/${r.project}/issues/${r.issue}`} className="font-medium text-accent-fg hover:underline">
+                    #{r.issue} {r.issue_title}
                   </Link>
-                </>
+                </div>
+              </div>
+              {r.live && (
+                <Button size="sm" variant="danger" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
+                  <Square size={11} fill="currentColor" /> Stop
+                </Button>
               )}
-            </span>
-            <span className="ml-auto text-xs text-zinc-500">{duration(r)}</span>
-            {r.live && (
-              <Button size="sm" variant="danger" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
-                <Square size={11} /> Stop
-              </Button>
-            )}
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {r.pr && (
+                <Link to={`/p/${r.project}/pulls/${r.pr}`} className="inline-flex items-center gap-1.5 rounded-md bg-accent-soft px-2 py-0.5 text-[11px] font-medium text-accent-fg hover:underline">
+                  <GitPullRequest size={12} /> PR #{r.pr}
+                </Link>
+              )}
+              {settings && (
+                <MetaChip icon={Cpu} title="Model · effort this run used">
+                  {settings}
+                </MetaChip>
+              )}
+              {r.total_tokens > 0 && (
+                <MetaChip icon={Terminal} title={r.models.join(", ")}>
+                  {fmtTokens(r.total_tokens)} tokens{r.cost_usd != null ? ` · $${r.cost_usd.toFixed(2)}*` : ""}
+                </MetaChip>
+              )}
+              {usage?.used !== undefined && (
+                <MetaChip icon={Box} title="Context window used">
+                  context {String(usage.used)}/{String(usage.size)}
+                </MetaChip>
+              )}
+              {r.container_name && (
+                <MetaChip icon={Box} title="Container" className="max-sm:hidden">
+                  {r.container_name}
+                </MetaChip>
+              )}
+              {r.worktree_path && (
+                <MetaChip icon={Folder} title={r.worktree_path} className="max-w-72 max-md:hidden">
+                  {r.worktree_path}
+                </MetaChip>
+              )}
+              <label className="ml-auto flex items-center gap-2 text-xs text-fg-muted">
+                Follow <Switch size="sm" checked={follow} onChange={setFollow} label="Follow the transcript" />
+              </label>
+            </div>
+            {r.error && <div className="rounded-lg bg-rose-500/8 px-2.5 py-1.5 text-xs break-words text-rose-700 dark:text-rose-300">{r.error}</div>}
           </div>
-          <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-zinc-500">
-            {r.worktree_path && (
-              <code title={r.worktree_path} className="min-w-0 truncate max-md:hidden">
-                {r.worktree_path}
-              </code>
-            )}
-            {r.container_name && <span>🐳 {r.container_name}</span>}
-            {settings && <span title="model · effort this run used">⚙ {settings}</span>}
-            {r.total_tokens > 0 && (
-              <span title={r.models.join(", ")}>
-                {fmtTokens(r.total_tokens)} tokens{r.cost_usd != null ? ` · $${r.cost_usd.toFixed(2)}*` : ""}
-              </span>
-            )}
-            {usage?.used !== undefined && (
-              <span>
-                context {String(usage.used)}/{String(usage.size)}
-              </span>
-            )}
-            <label className="ml-auto flex items-center gap-1">
-              <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> follow
-            </label>
-          </div>
-          {r.error && <div className="text-xs text-rose-600 break-words">{r.error}</div>}
-        </div>
+        </header>
       )}
-      <div className="space-y-2">
+      <div className="mx-auto w-full max-w-4xl flex-1 px-4 py-5 sm:px-6">
+        <ErrorBox error={run.error} />
         <Transcript events={events} worktree={r?.worktree_path} live={!!r?.live} />
-        {events.length === 0 && <Empty>No transcript yet.</Empty>}
+        {events.length === 0 && (
+          <EmptyState icon={<Terminal size={20} />} title="No transcript yet">
+            {r?.live ? "The agent is starting up…" : "This run didn't record any events."}
+          </EmptyState>
+        )}
+        {r?.live && (
+          <div className="mt-4 flex items-center gap-2 text-xs text-sky-600 dark:text-sky-400">
+            <LiveDot tone="sky" /> Working…
+          </div>
+        )}
         <div ref={bottom} />
       </div>
       {r?.live && (
         <form
-          className="sticky bottom-0 flex gap-2 bg-zinc-50 dark:bg-zinc-950 py-3"
+          className="sticky bottom-0 border-t border-line bg-surface/85 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl"
           onSubmit={(e) => {
             e.preventDefault();
             if (msg.trim()) send.mutate();
           }}
         >
-          <input className={inputCls} placeholder="Message the agent (delivered after its current turn)…" value={msg} onChange={(e) => setMsg(e.target.value)} />
-          <Button variant="primary">Send</Button>
+          <div className="mx-auto flex w-full max-w-4xl items-center gap-2 px-4 py-3 sm:px-6">
+            <input
+              className="h-11 min-w-0 flex-1 rounded-full border border-line bg-surface px-4 text-base shadow-card outline-none placeholder:text-fg-subtle focus:border-accent/60 focus:ring-3 focus:ring-accent/15 sm:text-sm"
+              placeholder="Message the agent (delivered after its current turn)…"
+              value={msg}
+              onChange={(e) => setMsg(e.target.value)}
+              aria-label="Message the agent"
+            />
+            <button
+              className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-accent text-white shadow-card transition-transform enabled:active:scale-95 disabled:opacity-40"
+              disabled={!msg.trim() || send.isPending}
+              aria-label="Send"
+            >
+              <ArrowUp size={18} />
+            </button>
+          </div>
         </form>
       )}
     </div>

@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import type { AgentDefinition } from "../api/client";
-import { fieldCls } from "./ui";
+import { fieldSmCls, selectCls } from "./ui";
 
 /** An ACP session config option as the agent reports it. */
 export type ConfigOption = {
@@ -61,10 +61,10 @@ export function SettingSelects({
         const v = values[o.id];
         const set = v !== undefined && v !== null;
         return (
-          <label key={o.id} className="flex items-center gap-1 text-xs text-zinc-500">
+          <label key={o.id} className="flex items-center gap-1.5 text-xs text-fg-muted">
             {!compact && <span>{settingLabel(o)}</span>}
             <select
-              className={clsx(fieldCls, "py-0.5 text-xs", set && "border-blue-400 dark:border-blue-700")}
+              className={clsx(fieldSmCls, selectCls, "max-w-60", set && "border-accent/50 bg-accent-soft/50 text-accent-fg")}
               value={set ? String(v) : ""}
               title={o.name}
               onChange={(e) => {

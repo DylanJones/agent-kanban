@@ -1,9 +1,9 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Bot, Brain, CheckCircle2, ChevronDown, ChevronRight, Circle, FileText, Loader2, Pencil, Search, ShieldAlert, Terminal, Wrench, XCircle } from "lucide-react";
+import { Brain, CheckCircle2, ChevronDown, ChevronRight, Circle, CircleDot, FileText, Loader2, MessageSquare, Pencil, ScrollText, Search, ShieldAlert, Terminal, Undo2, Wrench, XCircle } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { type RunEvent, api } from "../api/client";
-import { Button, Markdown } from "./ui";
+import { Avatar, Button, Markdown } from "./ui";
 
 type Payload = Record<string, unknown>;
 
@@ -20,7 +20,7 @@ export function ShellHighlight({ code }: { code: string }) {
   while ((m = TOKEN.exec(code))) {
     const [t, comment, str, variable, op, flag, nl, ws, word] = m;
     const k = i++;
-    if (comment) out.push(<span key={k} className="text-zinc-500 italic">{t}</span>);
+    if (comment) out.push(<span key={k} className="text-fg-subtle italic">{t}</span>);
     else if (str) {
       out.push(<span key={k} className="text-emerald-700 dark:text-emerald-400">{t}</span>);
       expectCmd = false;
@@ -133,24 +133,24 @@ function DiffBlock({ oldText, newText }: { oldText?: string; newText: string }) 
   const added = newLines.slice(a, newLines.length - b);
   const post = newLines.slice(newLines.length - b, Math.min(newLines.length, newLines.length - b + ctx));
   return (
-    <pre className="max-h-80 overflow-auto rounded bg-zinc-50 dark:bg-zinc-950 py-1 text-[11px] leading-4">
-      {pre.map((l, i) => <div key={`p${i}`} className="px-2 text-zinc-500">  {l}</div>)}
-      {removed.map((l, i) => <div key={`r${i}`} className="px-2 bg-rose-100/70 dark:bg-rose-950/50">- {l}</div>)}
-      {added.map((l, i) => <div key={`a${i}`} className="px-2 bg-emerald-100/70 dark:bg-emerald-950/50">+ {l}</div>)}
-      {post.map((l, i) => <div key={`s${i}`} className="px-2 text-zinc-500">  {l}</div>)}
+    <pre className="max-h-80 overflow-auto rounded-lg border border-line bg-surface py-1 font-mono text-[11px] leading-[1.15rem]">
+      {pre.map((l, i) => <div key={`p${i}`} className="px-2.5 text-fg-subtle">  {l}</div>)}
+      {removed.map((l, i) => <div key={`r${i}`} className="bg-rose-500/12 px-2.5 text-rose-900 dark:text-rose-200">- {l}</div>)}
+      {added.map((l, i) => <div key={`a${i}`} className="bg-emerald-500/12 px-2.5 text-emerald-900 dark:text-emerald-200">+ {l}</div>)}
+      {post.map((l, i) => <div key={`s${i}`} className="px-2.5 text-fg-subtle">  {l}</div>)}
     </pre>
   );
 }
 
 function StatusIcon({ status }: { status: string }) {
-  if (status === "completed") return <CheckCircle2 size={13} className="shrink-0 text-emerald-600" />;
-  if (status === "failed") return <XCircle size={13} className="shrink-0 text-rose-600" />;
-  if (status === "in_progress") return <Loader2 size={13} className="shrink-0 animate-spin text-blue-600" />;
-  return <Circle size={13} className="shrink-0 text-zinc-400" />;
+  if (status === "completed") return <CheckCircle2 size={13} className="shrink-0 text-emerald-500" />;
+  if (status === "failed") return <XCircle size={13} className="shrink-0 text-rose-500" />;
+  if (status === "in_progress") return <Loader2 size={13} className="shrink-0 animate-spin text-sky-500" />;
+  return <Circle size={13} className="shrink-0 text-fg-subtle" />;
 }
 
 function KindIcon({ kind }: { kind: string }) {
-  const cls = "shrink-0 text-zinc-400";
+  const cls = "shrink-0 text-fg-subtle";
   if (kind === "execute") return <Terminal size={12} className={cls} />;
   if (kind === "read") return <FileText size={12} className={cls} />;
   if (kind === "edit" || kind === "delete" || kind === "move") return <Pencil size={12} className={cls} />;
@@ -172,43 +172,47 @@ function ToolRow({ item, worktree }: { item: ToolItem; worktree?: string | null 
   const perm = item.perm;
   return (
     <div>
-      <button onClick={() => setOpen(!open)} className="group flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800/60">
-        {open ? <ChevronDown size={11} className="shrink-0 text-zinc-400" /> : <ChevronRight size={11} className="shrink-0 text-zinc-400" />}
+      <button onClick={() => setOpen(!open)} className="group flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs hover:bg-surface-2">
+        {open ? <ChevronDown size={12} className="shrink-0 text-fg-subtle" /> : <ChevronRight size={12} className="shrink-0 text-fg-subtle" />}
         <StatusIcon status={String(p.status ?? "pending")} />
         <KindIcon kind={kind} />
-        <span className={clsx("truncate", cmd && !(p.rawInput as Payload)?.description ? "font-mono" : "", "text-zinc-700 dark:text-zinc-300")}>{summary(p, worktree)}</span>
+        <span className={clsx("truncate", cmd && !(p.rawInput as Payload)?.description ? "font-mono" : "", "text-fg-muted group-hover:text-fg")}>{summary(p, worktree)}</span>
         {perm && typeof perm.decision === "string" && perm.decision.startsWith("denied") && (
-          <span className="ml-auto shrink-0 rounded bg-rose-100 dark:bg-rose-950 px-1 text-[10px] text-rose-700 dark:text-rose-300">{perm.decision}</span>
+          <span className="ml-auto shrink-0 rounded-md bg-rose-500/12 px-1.5 text-[10px] font-medium text-rose-700 dark:text-rose-300">{perm.decision}</span>
         )}
       </button>
       {open && (
-        <div className="ml-6 mt-1 mb-2 space-y-1.5">
+        <div className="mt-1 mb-2.5 ml-7 space-y-1.5">
           {cmd && (
-            <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 px-2.5 py-1.5 font-mono text-[11px] leading-4">
-              <span className="select-none text-zinc-400">$ </span>
+            <pre className="overflow-x-auto rounded-lg border border-line bg-surface px-3 py-2 font-mono text-[11px] leading-[1.15rem] break-all whitespace-pre-wrap">
+              <span className="text-fg-subtle select-none">$ </span>
               <ShellHighlight code={cmd} />
             </pre>
           )}
-          {!cmd && pathOf(p) && <div className="font-mono text-[11px] text-zinc-500">{pathOf(p)}</div>}
+          {!cmd && pathOf(p) && <div className="font-mono text-[11px] break-all text-fg-subtle">{pathOf(p)}</div>}
           {diffs.map((d, i) => (
             <div key={i}>
-              <div className="font-mono text-[11px] text-zinc-500">{shortPath(d.path, worktree)}</div>
+              <div className="mb-1 font-mono text-[11px] break-all text-fg-subtle">{shortPath(d.path, worktree)}</div>
               <DiffBlock oldText={d.oldText} newText={d.newText} />
             </div>
           ))}
           {out !== undefined && out.trim() !== "" && diffs.length === 0 && (
             <div className="relative">
-              <pre className={clsx("overflow-auto whitespace-pre-wrap break-all rounded-md bg-zinc-100 dark:bg-zinc-900 px-2.5 py-1.5 font-mono text-[11px] leading-4 text-zinc-700 dark:text-zinc-300", !showAll && "max-h-64")}>
+              <pre className={clsx("overflow-auto rounded-lg bg-surface-3/60 px-3 py-2 font-mono text-[11px] leading-[1.15rem] break-all whitespace-pre-wrap text-fg-muted", !showAll && "max-h-64")}>
                 {showAll ? out : outLines.slice(0, 200).join("\n")}
               </pre>
               {(outLines.length > 200 || (!showAll && outLines.length > 18)) && (
-                <button onClick={() => setShowAll(!showAll)} className="text-[11px] text-blue-600 hover:underline">
+                <button onClick={() => setShowAll(!showAll)} className="mt-1 text-[11px] font-medium text-accent-fg hover:underline">
                   {showAll ? "Collapse output" : `Show all ${outLines.length} lines`}
                 </button>
               )}
             </div>
           )}
-          {perm && <div className="text-[10px] text-zinc-500">🔐 {String(perm.decision ?? perm.status)}</div>}
+          {perm && (
+            <div className="flex items-center gap-1 text-[10px] text-fg-subtle">
+              <ShieldAlert size={11} /> {String(perm.decision ?? perm.status)}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -243,15 +247,19 @@ function ToolGroup({ items, worktree, live }: { items: ToolItem[]; worktree?: st
   const last = items[items.length - 1].ev.payload as Payload;
   return (
     <div className="text-sm">
-      <button onClick={() => setOpen(!open)} className="flex items-center gap-1.5 text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">
-        {running && live ? <Loader2 size={12} className="animate-spin text-blue-600" /> : open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-        <span>{groupLabel(items)}</span>
-        {failed > 0 && <span className="text-rose-600">· {failed} failed</span>}
-        {denied > 0 && <span className="text-rose-600">· {denied} denied</span>}
-        {!open && running && live && <span className="max-w-md truncate text-xs text-zinc-400">— {summary(last, worktree)}</span>}
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex max-w-full items-center gap-2 rounded-lg border border-line bg-surface px-2.5 py-1.5 text-[13px] text-fg-muted shadow-card transition-colors hover:border-line-strong hover:text-fg"
+      >
+        {running && live ? <Loader2 size={13} className="shrink-0 animate-spin text-sky-500" /> : <Wrench size={13} className="shrink-0 text-fg-subtle" />}
+        <span className="shrink-0">{groupLabel(items)}</span>
+        {failed > 0 && <span className="shrink-0 text-rose-600 dark:text-rose-400">· {failed} failed</span>}
+        {denied > 0 && <span className="shrink-0 text-rose-600 dark:text-rose-400">· {denied} denied</span>}
+        {!open && running && live && <span className="min-w-0 truncate text-xs text-fg-subtle">— {summary(last, worktree)}</span>}
+        {open ? <ChevronDown size={13} className="shrink-0 text-fg-subtle" /> : <ChevronRight size={13} className="shrink-0 text-fg-subtle" />}
       </button>
       {open && (
-        <div className="mt-1 ml-1 border-l border-zinc-200 dark:border-zinc-800 pl-2">
+        <div className="mt-1.5 ml-3 border-l-2 border-line pl-2">
           {items.map((it) => (
             <ToolRow key={it.ev.seq} item={it} worktree={worktree} />
           ))}
@@ -267,11 +275,11 @@ function Collapsible({ title, children, defaultOpen, className }: { title: React
   const [open, setOpen] = useState(!!defaultOpen);
   return (
     <div className={className}>
-      <button onClick={() => setOpen(!open)} className="flex items-center gap-1 text-left text-xs text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">
-        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+      <button onClick={() => setOpen(!open)} className="flex items-center gap-1.5 text-left text-xs text-fg-muted hover:text-fg">
+        {open ? <ChevronDown size={12} className="shrink-0" /> : <ChevronRight size={12} className="shrink-0" />}
         {title}
       </button>
-      {open && <div className="mt-1">{children}</div>}
+      {open && <div className="mt-2">{children}</div>}
     </div>
   );
 }
@@ -286,20 +294,20 @@ function PendingPermission({ p }: { p: Payload }) {
   const tool = (p.tool_call as Payload) ?? {};
   const cmd = commandOf(tool);
   return (
-    <div className="rounded-md border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-2.5 text-sm space-y-2">
-      <div className="flex items-center gap-1.5">
-        <ShieldAlert size={14} className="text-amber-600" /> Permission needed{p.reason ? <span className="text-xs text-zinc-500">({String(p.reason)})</span> : null}
+    <div className="space-y-2.5 rounded-xl border border-amber-500/40 bg-amber-500/8 p-3 text-sm">
+      <div className="flex items-center gap-2 font-medium text-amber-800 dark:text-amber-300">
+        <ShieldAlert size={15} /> Permission needed{p.reason ? <span className="text-xs font-normal text-fg-muted">({String(p.reason)})</span> : null}
       </div>
       {cmd ? (
-        <pre className="whitespace-pre-wrap break-all rounded bg-white dark:bg-zinc-950 px-2 py-1 font-mono text-[11px]">
-          <span className="select-none text-zinc-400">$ </span>
+        <pre className="rounded-lg border border-line bg-surface px-3 py-2 font-mono text-[11px] break-all whitespace-pre-wrap">
+          <span className="text-fg-subtle select-none">$ </span>
           <ShellHighlight code={cmd} />
         </pre>
       ) : (
         <div className="text-xs">{String(p.title)}</div>
       )}
       {p.status === "pending" ? (
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {options.map((o) => (
             <Button key={o.optionId} size="sm" variant={o.kind.startsWith("allow") ? "success" : "default"} onClick={() => answer.mutate(o.optionId)}>
               {o.name}
@@ -307,7 +315,7 @@ function PendingPermission({ p }: { p: Payload }) {
           ))}
         </div>
       ) : (
-        <div className="text-xs text-zinc-500">{String(p.status)}</div>
+        <div className="text-xs text-fg-muted">{String(p.status)}</div>
       )}
     </div>
   );
@@ -319,8 +327,13 @@ function EventView({ ev }: { ev: RunEvent }) {
     case "prompt":
       return (
         <Collapsible
-          className="rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 px-3 py-2"
-          title={<span className="font-medium">{p.from === "nudge" ? "↪ Nudge" : p.from === "human" ? "💬 Message from human" : "📝 Prompt"}</span>}
+          className={clsx("rounded-xl border px-3.5 py-2.5", p.from === "human" ? "border-accent/25 bg-accent-soft/50" : "border-line bg-surface-2/60")}
+          title={
+            <span className="flex items-center gap-1.5 font-medium">
+              {p.from === "nudge" ? <Undo2 size={13} /> : p.from === "human" ? <MessageSquare size={13} /> : <ScrollText size={13} />}
+              {p.from === "nudge" ? "Nudge" : p.from === "human" ? "Message from you" : "Prompt"}
+            </span>
+          }
           defaultOpen={p.from === "human" || p.from === "nudge"}
         >
           <Markdown className="text-xs">{String(p.text)}</Markdown>
@@ -328,41 +341,56 @@ function EventView({ ev }: { ev: RunEvent }) {
       );
     case "message":
       return (
-        <div className="flex gap-2">
-          <Bot size={16} className="mt-0.5 shrink-0 text-zinc-400" />
-          <Markdown className="flex-1 min-w-0">{String(p.text)}</Markdown>
+        <div className="flex gap-3">
+          <Avatar agent size={24} className="mt-0.5" />
+          <Markdown className="min-w-0 flex-1">{String(p.text)}</Markdown>
         </div>
       );
     case "thought":
       return (
-        <Collapsible title={<span className="flex items-center gap-1 italic"><Brain size={12} /> Thinking</span>}>
-          <div className="whitespace-pre-wrap pl-4 text-xs italic text-zinc-500">{String(p.text)}</div>
+        <Collapsible title={<span className="flex items-center gap-1.5 italic"><Brain size={13} /> Thinking</span>}>
+          <div className="border-l-2 border-line pl-3 text-xs whitespace-pre-wrap text-fg-muted italic">{String(p.text)}</div>
         </Collapsible>
       );
     case "plan": {
       const entries = (p.entries as { content: string; status: string }[]) ?? [];
       return (
-        <div className="rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-sm">
-          <div className="mb-1 text-xs font-medium text-zinc-500">Plan</div>
-          {entries.map((e, i) => (
-            <div key={i} className={clsx("flex gap-2", e.status === "completed" && "text-zinc-400 line-through")}>
-              <span>{e.status === "completed" ? "☑" : e.status === "in_progress" ? "▶" : "☐"}</span>
-              {e.content}
-            </div>
-          ))}
+        <div className="rounded-xl border border-line bg-surface px-3.5 py-3 text-sm shadow-card">
+          <div className="mb-2 text-xs font-semibold text-fg-muted">Plan</div>
+          <div className="space-y-1.5">
+            {entries.map((e, i) => (
+              <div key={i} className={clsx("flex gap-2", e.status === "completed" && "text-fg-subtle line-through")}>
+                {e.status === "completed" ? (
+                  <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-emerald-500" />
+                ) : e.status === "in_progress" ? (
+                  <CircleDot size={15} className="mt-0.5 shrink-0 text-sky-500" />
+                ) : (
+                  <Circle size={15} className="mt-0.5 shrink-0 text-fg-subtle" />
+                )}
+                <span className="min-w-0">{e.content}</span>
+              </div>
+            ))}
+          </div>
         </div>
       );
     }
     case "stderr":
       return (
-        <Collapsible title={<span className="flex items-center gap-1"><Terminal size={11} /> adapter log</span>}>
-          <pre className="max-h-48 overflow-auto rounded bg-zinc-900 p-2 text-[11px] text-zinc-300">{String(p.text)}</pre>
+        <Collapsible title={<span className="flex items-center gap-1.5"><Terminal size={12} /> Adapter log</span>}>
+          <pre className="max-h-48 overflow-auto rounded-lg bg-zinc-950 p-3 font-mono text-[11px] text-zinc-300">{String(p.text)}</pre>
         </Collapsible>
       );
     case "setup":
       return (
-        <Collapsible title={`Setup script ${p.ok ? "✓" : "✗ failed"}`} defaultOpen={!p.ok}>
-          <pre className="max-h-48 overflow-auto rounded bg-zinc-900 p-2 text-[11px] text-zinc-300">{String(p.text)}</pre>
+        <Collapsible
+          title={
+            <span className={clsx("flex items-center gap-1.5", !p.ok && "text-rose-600 dark:text-rose-400")}>
+              {p.ok ? <CheckCircle2 size={12} className="text-emerald-500" /> : <XCircle size={12} />} Setup script{p.ok ? "" : " failed"}
+            </span>
+          }
+          defaultOpen={!p.ok}
+        >
+          <pre className="max-h-48 overflow-auto rounded-lg bg-zinc-950 p-3 font-mono text-[11px] text-zinc-300">{String(p.text)}</pre>
         </Collapsible>
       );
     case "permission":
@@ -370,7 +398,7 @@ function EventView({ ev }: { ev: RunEvent }) {
     case "usage":
       return null;
     default:
-      return <div className="text-xs text-zinc-500">• {String(p.text ?? JSON.stringify(p))}</div>;
+      return <div className="text-xs break-words text-fg-subtle">• {String(p.text ?? JSON.stringify(p))}</div>;
   }
 }
 
@@ -419,7 +447,7 @@ function blocks(events: RunEvent[]): Block[] {
 
 export function Transcript({ events, worktree, live }: { events: RunEvent[]; worktree?: string | null; live: boolean }) {
   return (
-    <div className="space-y-2.5">
+    <div className="space-y-3.5">
       {blocks(events).map((b) =>
         b.type === "tools" ? <ToolGroup key={b.key} items={b.items} worktree={worktree} live={live} /> : <EventView key={b.key} ev={b.ev} />,
       )}
