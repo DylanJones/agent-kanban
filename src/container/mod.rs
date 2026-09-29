@@ -20,7 +20,8 @@ USER root
 COPY --from=node:24-slim /usr/local /usr/local
 RUN (command -v apt-get >/dev/null && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git curl ca-certificates ccache bash && rm -rf /var/lib/apt/lists/*) \
  || (command -v apk >/dev/null && apk add --no-cache git curl ca-certificates ccache bash) || true
-RUN npm install -g @agentclientprotocol/claude-agent-acp @agentclientprotocol/codex-acp && npm cache clean --force
+RUN npm install -g @agentclientprotocol/claude-agent-acp @agentclientprotocol/codex-acp && npm cache clean --force \
+ && npm ls -g --depth=0 @agentclientprotocol/claude-agent-acp @agentclientprotocol/codex-acp
 RUN (getent passwd {{UID}} >/dev/null && userdel -f $(getent passwd {{UID}} | cut -d: -f1) || true) \
  && (getent group {{GID}} >/dev/null || groupadd -g {{GID}} agent) \
  && useradd -m -u {{UID}} -g {{GID}} -s /bin/bash agent \
@@ -60,12 +61,15 @@ pub async fn daemon_ready() -> bool {
     ok
 }
 
-async fn build(tag: &str, dockerfile: &str, context: &Path, log: &mut (dyn FnMut(String) + Send)) -> anyhow::Result<()> {
+/// `no_cache` rebuilds every step instead of reusing Docker's layer cache.
+async fn build(tag: &str, dockerfile: &str, context: &Path, no_cache: bool, log: &mut (dyn FnMut(String) + Send)) -> anyhow::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let df_path = std::env::temp_dir().join(format!("akb-{}.Dockerfile", tag.replace(['/', ':'], "-")));
     tokio::fs::write(&df_path, dockerfile).await?;
     let mut child = Command::new("docker")
-        .args(["build", "--progress=plain", "-t", tag, "-f"])
+        .args(["build", "--progress=plain", "-t", tag])
+        .args(no_cache.then_some("--no-cache"))
+        .arg("-f")
         .arg(&df_path)
         .arg(context)
         .stdout(std::process::Stdio::piped())
@@ -102,10 +106,12 @@ pub async fn build_image(app: &AppState, project: &Project, log: &mut (dyn FnMut
     tokio::fs::create_dir_all(&empty).await?;
     let context = project.container_context.clone().map(std::path::PathBuf::from).unwrap_or_else(|| empty.clone());
     log(format!("building base image {base_tag} (context {})", context.display()));
-    build(&base_tag, &base_df, &context, log).await?;
+    build(&base_tag, &base_df, &context, false, log).await?;
     let overlay = overlay_tmpl.replace("{{BASE}}", &base_tag);
     log(format!("building agent overlay {tag}"));
-    build(&tag, &overlay, &empty, log).await?;
+    // The overlay installs the ACP adapters unversioned, so a cached layer would pin whatever was
+    // current when it was first built; skip the cache (~25s) so every build gets the latest.
+    build(&tag, &overlay, &empty, true, log).await?;
     sqlx::query("UPDATE projects SET container_image = ?, updated_at = ? WHERE id = ?")
         .bind(&tag)
         .bind(db::now())
