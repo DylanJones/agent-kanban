@@ -265,6 +265,10 @@ Credentials are never shared with containers beyond what the agent needs:
 - **Claude:** put a long-lived `claude_code_oauth_token` (from `claude setup-token`) in
   `secrets.toml`.
 - **Codex:** `~/.codex/auth.json` is mounted.
+- **OpenCode:** `~/.local/share/opencode/auth.json` (from `opencode auth login`) is mounted
+  read-write so tokens can refresh, and `~/.config/opencode/` read-only. `$XDG_DATA_HOME` and
+  `$XDG_CONFIG_HOME` are honoured; missing paths aren't mounted. Rebuild the image after
+  upgrading so the mount points exist for the container user.
 - **GitHub and SSH:** never mounted. Pushes happen on the host.
 
 ## GitHub

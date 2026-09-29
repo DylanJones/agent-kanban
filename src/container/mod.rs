@@ -26,7 +26,7 @@ RUN npm install -g @agentclientprotocol/claude-agent-acp @agentclientprotocol/co
 RUN (getent passwd {{UID}} >/dev/null && userdel -f $(getent passwd {{UID}} | cut -d: -f1) || true) \
  && (getent group {{GID}} >/dev/null || groupadd -g {{GID}} agent) \
  && useradd -m -u {{UID}} -g {{GID}} -s /bin/bash agent \
- && mkdir -p /home/agent/.ccache /home/agent/.codex && chown -R {{UID}}:{{GID}} /home/agent
+ && mkdir -p /home/agent/.ccache /home/agent/.codex /home/agent/.config/opencode /home/agent/.local/share/opencode && chown -R {{UID}}:{{GID}} /home/agent
 ENV IS_SANDBOX=1 CCACHE_DIR=/home/agent/.ccache HOME=/home/agent
 USER agent
 "#;
@@ -198,6 +198,12 @@ pub async fn run_args(
                 }
             }
         }
+        "opencode" => {
+            if let Some(home) = dirs::home_dir() {
+                let xdg = |var: &str, fallback: &str| std::env::var_os(var).filter(|v| !v.is_empty()).map_or_else(|| home.join(fallback), Into::into);
+                a.extend(opencode_mounts(&xdg("XDG_DATA_HOME", ".local/share"), &xdg("XDG_CONFIG_HOME", ".config")));
+            }
+        }
         _ => {}
     }
     for (k, v) in &secrets.container_env {
@@ -217,6 +223,25 @@ pub async fn run_args(
     a.push(image);
     a.extend(container_command(agent));
     Ok(ContainerLaunch { name, args: a })
+}
+
+/// `-v` arguments sharing the host's OpenCode login (`<data home>/opencode/auth.json`, writable so
+/// OAuth tokens can refresh) and global config (`<config home>/opencode`, read-only) with the
+/// container user. Missing paths are skipped so Docker doesn't create them as root-owned
+/// directories; the overlay pre-creates the parents as the agent user.
+pub fn opencode_mounts(data_home: &Path, config_home: &Path) -> Vec<String> {
+    let mut a = Vec::new();
+    let auth = data_home.join("opencode/auth.json");
+    if auth.is_file() {
+        a.push("-v".into());
+        a.push(format!("{}:/home/agent/.local/share/opencode/auth.json", auth.display()));
+    }
+    let config = config_home.join("opencode");
+    if config.is_dir() {
+        a.push("-v".into());
+        a.push(format!("{}:/home/agent/.config/opencode:ro", config.display()));
+    }
+    a
 }
 
 /// The command line an agent runs inside the container: its container override, else its host command.
