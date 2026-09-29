@@ -4,6 +4,7 @@ import { ArrowLeft, ArrowUp, Box, CheckCircle2, CircleSlash, Clock, Cpu, Folder,
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import { ROLE_LABEL, type RunEvent, type RunView, api, client, unwrap } from "../api/client";
+import { RunUsageChips, TOTAL_TOKENS_HELP } from "../components/RunUsage";
 import { summarizeSettings } from "../components/SessionSettings";
 import { Transcript } from "../components/Transcript";
 import { Button, EmptyState, ErrorBox, LiveDot, Page, PageHeader, Pill, Segmented, Switch, TimeAgo, type Tone, fmtDur } from "../components/ui";
@@ -102,8 +103,8 @@ export function RunsPage() {
               </div>
               <div className="flex shrink-0 flex-col items-end gap-0.5 text-xs text-fg-subtle tabular-nums">
                 <TimeAgo iso={r.created_at} />
-                <span className="max-sm:hidden">
-                  {[r.total_tokens > 0 ? `${fmtTokens(r.total_tokens)} tok` : "", duration(r)].filter(Boolean).join(" · ")}
+                <span className="max-sm:hidden" title={r.total_tokens > 0 ? TOTAL_TOKENS_HELP : undefined}>
+                  {[r.total_tokens > 0 ? `${fmtTokens(r.total_tokens)} tok total` : "", duration(r)].filter(Boolean).join(" · ")}
                 </span>
               </div>
             </Link>
@@ -209,16 +210,7 @@ export function RunDetail() {
                   {settings}
                 </MetaChip>
               )}
-              {r.total_tokens > 0 && (
-                <MetaChip icon={Terminal} title={r.models.join(", ")}>
-                  {fmtTokens(r.total_tokens)} tokens{r.cost_usd != null ? ` · $${r.cost_usd.toFixed(2)}*` : ""}
-                </MetaChip>
-              )}
-              {usage?.used !== undefined && (
-                <MetaChip icon={Box} title="Context window used">
-                  context {String(usage.used)}/{String(usage.size)}
-                </MetaChip>
-              )}
+              <RunUsageChips totalTokens={r.total_tokens} models={r.models} costUsd={r.cost_usd} context={usage && { used: usage.used, size: usage.size }} />
               {r.container_name && (
                 <MetaChip icon={Box} title="Container" className="max-sm:hidden">
                   {r.container_name}
