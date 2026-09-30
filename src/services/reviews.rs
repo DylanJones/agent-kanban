@@ -74,9 +74,14 @@ pub async fn submit(app: &AppState, project: &Project, number: i64, actor: &Acto
         "changes_requested" => Some(IssueState::ChangesRequested),
         _ => None,
     };
+    // Parked batch members are skipped, but an agent's own issue must always be in review.
+    let bound = match actor {
+        Actor::Agent { issue_id, .. } => *issue_id,
+        _ => None,
+    };
     if let Some(_t) = target
         && !actor.is_human()
-        && let Some(i) = issues.iter().find(|i| i.state != IssueState::InReview)
+        && let Some(i) = issues.iter().find(|i| i.state != IssueState::InReview && (!super::is_parked(i) || Some(i.id) == bound))
     {
         return Err(ApiError::conflict(format!(
             "issue #{} is `{}`, not `in_review`; a verdict can only be recorded for work in review",
@@ -85,17 +90,23 @@ pub async fn submit(app: &AppState, project: &Project, number: i64, actor: &Acto
         )));
     }
 
+    let (parked, issues): (Vec<_>, Vec<_>) = issues.into_iter().partition(super::is_parked);
+
     let title = match verdict {
         "approve" => "✅ **Review verdict: ready to merge**",
         "changes_requested" => "🔁 **Review verdict: changes requested**",
         "needs_decision" => "❓ **Review verdict: needs human decision**",
         _ => "💬 **Review comment**",
     };
-    let summary = if req.body.trim().is_empty() {
+    let mut summary = if req.body.trim().is_empty() {
         format!("{title} at `{}`", short(&head))
     } else {
         format!("{title} at `{}`\n\n{}", short(&head), req.body.trim())
     };
+    if !parked.is_empty() && verdict != "comment" {
+        let nums = parked.iter().map(|i| format!("#{}", i.number)).collect::<Vec<_>>().join(", ");
+        summary.push_str(&format!("\n\n_Parked in `backlog`, left untouched: {nums}._"));
+    }
 
     let mut tx = begin_write(&app.db).await?;
     let now = db::now();
@@ -156,7 +167,7 @@ pub async fn submit(app: &AppState, project: &Project, number: i64, actor: &Acto
         }
     }
     app.bus.pr(&project.slug, number);
-    for i in &issues {
+    for i in issues.iter().chain(&parked) {
         app.bus.issue(&project.slug, i.number);
     }
     crate::github::mirror::on_review(app, project, pr.id, &summary).await;

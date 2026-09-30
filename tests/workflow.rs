@@ -726,3 +726,75 @@ async fn agent_crash_before_its_turn_fails_the_run_cleanly() {
     assert!(r.error.as_deref().unwrap_or("").contains("session ended"), "{:?}", r.error);
     assert_eq!(issue(&env, i.number).await.failure_count, 1);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn batch_review_and_merge_leave_parked_members_alone() {
+    let env = setup().await;
+    fake_agent(&env.app, "f-fix", "fix", "fake").await;
+    fake_agent(&env.app, "f-approve", "review_approve", "fake").await;
+    let batch = new_issue(&env, "Batch", IssueState::Ready).await;
+    run(&env, batch.number, Role::Fix, "f-fix").await;
+    assert_eq!(issue(&env, batch.number).await.state, IssueState::InReview);
+    let pr = services::pulls::open_pr_for_issue(&env.app.db, batch.id).await.unwrap().unwrap();
+    // A member a human deliberately parked in backlog is linked to the same PR.
+    let parked = new_issue(&env, "Parked member", IssueState::Backlog).await;
+    sqlx::query("INSERT INTO pull_request_issues(pr_id, issue_id) VALUES (?, ?)")
+        .bind(pr.id)
+        .bind(parked.id)
+        .execute(&env.app.db)
+        .await
+        .unwrap();
+
+    let r = run(&env, batch.number, Role::Review, "f-approve").await;
+    assert_eq!(r.status, "succeeded", "{}", transcript(&env, r.id).await);
+    assert_eq!(issue(&env, batch.number).await.state, IssueState::ReadyToMerge);
+    assert_eq!(issue(&env, parked.number).await.state, IssueState::Backlog);
+    let pr = services::pull_by_id(&env.app.db, pr.id).await.unwrap();
+    assert_eq!(pr.approved_sha, pr.head_sha);
+    let msg = services::merge::default_message(&env.app, pr.id, &pr.title).await;
+    assert!(msg.contains(&format!("Closes #{}", batch.number)) && !msg.contains(&format!("Closes #{}", parked.number)), "{msg}");
+
+    services::merge::merge(&env.app, &env.project, pr.number, &Actor::human("dylan"), Default::default()).await.unwrap();
+    assert_eq!(issue(&env, batch.number).await.state, IssueState::Done);
+    assert_eq!(issue(&env, parked.number).await.state, IssueState::Backlog);
+    // The GitHub mirror's `merged` job (queued after the local transitions) closes exactly these.
+    let closing: Vec<i64> = services::pr_closing_issues(&env.app.db, pr.id).await.unwrap().iter().map(|i| i.number).collect();
+    assert_eq!(closing, vec![batch.number]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn merge_without_force_rejects_a_pr_whose_issues_are_all_parked() {
+    let env = setup().await;
+    fake_agent(&env.app, "f-fix", "fix", "fake").await;
+    fake_agent(&env.app, "f-approve", "review_approve", "fake").await;
+    let i = new_issue(&env, "Deprioritised", IssueState::Ready).await;
+    run(&env, i.number, Role::Fix, "f-fix").await;
+    run(&env, i.number, Role::Review, "f-approve").await;
+    assert_eq!(issue(&env, i.number).await.state, IssueState::ReadyToMerge);
+    let pr = services::pulls::open_pr_for_issue(&env.app.db, i.id).await.unwrap().unwrap();
+    // A human moves the only linked issue back to backlog after approval.
+    sqlx::query("UPDATE issues SET state = 'backlog' WHERE id = ?").bind(i.id).execute(&env.app.db).await.unwrap();
+
+    let err = services::merge::merge(&env.app, &env.project, pr.number, &Actor::human("dylan"), Default::default()).await.unwrap_err();
+    assert!(format!("{err:?}").contains("parked"), "{err:?}");
+    let req = services::merge::MergeRequest { force: true, ..Default::default() };
+    services::merge::merge(&env.app, &env.project, pr.number, &Actor::human("dylan"), req).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn agent_verdict_still_requires_its_own_issue_in_review() {
+    let env = setup().await;
+    fake_agent(&env.app, "f-fix", "fix", "fake").await;
+    let i = new_issue(&env, "Batch", IssueState::Ready).await;
+    run(&env, i.number, Role::Fix, "f-fix").await;
+    let pr = services::pulls::open_pr_for_issue(&env.app.db, i.id).await.unwrap().unwrap();
+    sqlx::query("UPDATE issues SET state = 'backlog' WHERE id = ?").bind(i.id).execute(&env.app.db).await.unwrap();
+    let a = agent(&env, "f-fix").await;
+    let r = scheduler::start_run(&env.app, &env.project, &issue(&env, i.number).await, Role::Review, &a).await.unwrap();
+    wait_run(&env, r.id).await;
+    let actor = Actor::Agent { run_id: r.id, role: Role::Review, issue_id: Some(i.id), project_id: env.project.id, agent_name: "f".into() };
+    let req = services::reviews::NewReview { verdict: "approve".into(), body: String::new(), commit_sha: pr.head_sha.clone().unwrap() };
+    let err = services::reviews::submit(&env.app, &env.project, pr.number, &actor, req).await.unwrap_err();
+    assert!(format!("{err:?}").contains("not `in_review`"), "{err:?}");
+    assert_eq!(issue(&env, i.number).await.state, IssueState::Backlog);
+}
