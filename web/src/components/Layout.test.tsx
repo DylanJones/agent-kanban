@@ -1,9 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
-import { NavDrawer } from "./Layout";
+import { MAX_TOASTS, NavDrawer, RunToasts } from "./Layout";
 
 // jsdom does no layout, so `offsetParent` (which the drawer's focus trap uses to skip hidden
 // controls) is always null; stand in with "has a parent" so mounted, non-`display:none` elements
@@ -209,5 +209,63 @@ describe("NavDrawer", () => {
     expect(screen.queryByRole("menu")).toBeNull();
     // The drawer closes on any route change, so reaching the other project's board shows up as a close.
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe("RunToasts", () => {
+  let active: { id: number }[];
+  const run = (id: number) => ({ id, role: "fix", status: "succeeded", issue: id, issue_title: `Issue ${id}`, agent: "codex", error: null });
+
+  beforeEach(() => {
+    getMock.mockReset();
+    active = Array.from({ length: 8 }, (_, i) => run(i + 1));
+    getMock.mockImplementation((path: string, opts?: { params?: { path?: { id?: number } } }) => {
+      if (path === "/api/runs") return ok(active);
+      if (path === "/api/runs/{id}") return ok(run(opts!.params!.path!.id!));
+      throw new Error(`unexpected path: ${path}`);
+    });
+  });
+  afterEach(cleanup);
+
+  async function finishAll() {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <RunToasts />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(document.title).toBe("(8 running) agent-kanban"));
+    active = [];
+    await act(() => qc.refetchQueries({ queryKey: ["runs", "active"] }));
+    await screen.findByRole("link", { name: /more runs finished/ });
+  }
+
+  test("a burst of finished runs shows a bounded stack plus a summary link", async () => {
+    await finishAll();
+    const region = screen.getByRole("status", { name: "Run notifications" });
+    const toasts = within(region).getAllByRole("link", { name: /run succeeded/ });
+    expect(toasts).toHaveLength(MAX_TOASTS);
+    // The newest runs stay visible; the rest are summarised.
+    expect(toasts.map((t) => t.getAttribute("href"))).toEqual(["/runs/6", "/runs/7", "/runs/8"]);
+    const more = within(region).getByRole("link", { name: `+${8 - MAX_TOASTS} more runs finished` });
+    expect(more.getAttribute("href")).toBe("/runs");
+  });
+
+  test("toasts sit at the top on phones and below the menu drawer and dialogs (z-50)", async () => {
+    await finishAll();
+    const cls = screen.getByRole("status", { name: "Run notifications" }).className;
+    expect(cls).toMatch(/(^| )top-\[/);
+    expect(cls).not.toMatch(/(^| )bottom-/);
+    expect(cls).toMatch(/(^| )z-40( |$)/);
+  });
+
+  test("each toast can be dismissed, which reveals the next one", async () => {
+    await finishAll();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss run #8 notification" }));
+    const hrefs = screen.getAllByRole("link", { name: /run succeeded/ }).map((t) => t.getAttribute("href"));
+    expect(hrefs).toEqual(["/runs/5", "/runs/6", "/runs/7"]);
+    expect(screen.getByRole("link", { name: "+4 more runs finished" })).toBeTruthy();
   });
 });
