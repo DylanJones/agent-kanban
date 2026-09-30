@@ -43,7 +43,7 @@ function SettingsCard() {
             </div>
             <Switch checked={d.scheduler_enabled} onChange={(v) => patch.mutate({ scheduler_enabled: v })} label="Scheduler" tone="green" />
           </div>
-          <Field label="Max simultaneous agents" hint="Across all projects and agents">
+          <Field label="Max simultaneous agents" hint="Across all projects and agents. Each agent and project also has its own limit; the lowest one wins.">
             <input type="number" min={0} max={64} className={inputCls} defaultValue={d.max_concurrent_runs} onBlur={(e) => patch.mutate({ max_concurrent_runs: Number(e.target.value) })} />
           </Field>
           <Field label="Failures before stalling">
@@ -252,7 +252,7 @@ function AgentForm({ agent, onClose }: { agent?: AgentDefinition; onClose: () =>
             {policy}
           </select>
         </Field>
-        <Field label="Max concurrent runs of this agent">
+        <Field label="Max concurrent runs of this agent" hint="Across all projects and roles. The global and project limits still apply.">
           <input type="number" className={inputCls} value={f.max_concurrent} onChange={(e) => setF({ ...f, max_concurrent: Number(e.target.value) })} />
         </Field>
         <Field label="Session mode (host)" hint="Claude: auto, acceptEdits, default · Codex: agent, read-only">

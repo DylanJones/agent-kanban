@@ -1325,6 +1325,11 @@ export interface components {
         Board: {
             /** Format: int64 */
             active_runs: number;
+            /**
+             * @description The concurrency limits that apply to `dispatchable`: the global limit, this project's limit (if
+             *     set), and each agent the queued cards need. Counted the same way the scheduler counts them.
+             */
+            capacity: components["schemas"]["CapacityLimit"][];
             columns: components["schemas"]["BoardColumn"][];
             /** @description Cards the scheduler would start an agent on now (`next.kind == "agent"`), in dispatch order. */
             dispatchable: number[];
@@ -1334,6 +1339,11 @@ export interface components {
             max_concurrent_runs: number;
             project: components["schemas"]["Project"];
             scheduler_enabled: boolean;
+            /**
+             * Format: int64
+             * @description How many of `dispatchable` could start right now once every limit in `capacity` is applied.
+             */
+            startable: number;
         };
         BoardColumn: {
             cards: components["schemas"]["Card"][];
@@ -1384,6 +1394,25 @@ export interface components {
             on_main: boolean;
             /** @description A build succeeded and the process is about to restart, or (in drain mode) is waiting to. */
             restart_pending: boolean;
+        };
+        /** @description One concurrency limit and how full it is. */
+        CapacityLimit: {
+            /**
+             * Format: int64
+             * @description Active (queued, preparing or running) runs counted against this limit.
+             */
+            active: number;
+            /** @description The agent's slug, for `kind == "agent"`. */
+            agent?: string | null;
+            /** @description `global` (all projects and agents) · `project` (this project) · `agent` (one agent, across projects and roles). */
+            kind: string;
+            /** Format: int64 */
+            max: number;
+            /**
+             * Format: int64
+             * @description Cards in `dispatchable` this limit applies to.
+             */
+            queued: number;
         };
         Card: {
             closed_at?: string | null;
