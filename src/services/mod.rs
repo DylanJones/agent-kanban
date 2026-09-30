@@ -117,6 +117,20 @@ pub fn is_parked(issue: &Issue) -> bool {
     issue.state == IssueState::Backlog
 }
 
+/// The linked issues a merge of this PR closes, by number: every linked issue except parked ones.
+/// The merge commit's `Closes #n` lines, the local `done` transition and the GitHub mirror's
+/// issue closing all use this, so they can't drift apart.
+pub async fn pr_closing_issues(db: &Db, pr_id: i64) -> ApiResult<Vec<Issue>> {
+    let mut issues = sqlx::query_as::<_, Issue>(
+        "SELECT i.* FROM issues i JOIN pull_request_issues pi ON pi.issue_id = i.id WHERE pi.pr_id = ? ORDER BY i.number",
+    )
+    .bind(pr_id)
+    .fetch_all(db)
+    .await?;
+    issues.retain(|i| !is_parked(i));
+    Ok(issues)
+}
+
 /// Agents may act on a PR if it is linked to their bound issue.
 pub async fn ensure_pr_access(db: &Db, actor: &Actor, pr: &PullRequest) -> ApiResult<()> {
     if let Actor::Agent { issue_id, project_id, .. } = actor {

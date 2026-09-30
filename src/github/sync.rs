@@ -81,12 +81,9 @@ pub async fn merged(app: &AppState, project: &Project, pr_id: i64, log: &mut (dy
         let _ = gh(&["api", "-X", "DELETE", &format!("repos/{repo}/git/refs/heads/{}", pr.branch)], None).await;
         log(format!("closed GitHub PR #{n}"));
     }
-    let nums: Vec<Option<i64>> =
-        sqlx::query_scalar("SELECT i.github_number FROM issues i JOIN pull_request_issues pi ON pi.issue_id = i.id WHERE pi.pr_id = ?")
-            .bind(pr.id)
-            .fetch_all(&app.db)
-            .await?;
-    for g in nums.into_iter().flatten() {
+    // Parked batch members stay open, on GitHub as on the board.
+    let closing = services::pr_closing_issues(&app.db, pr.id).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+    for g in closing.into_iter().filter_map(|i| i.github_number) {
         let _ = gh(&["issue", "close", &g.to_string(), "--repo", repo, "--comment", &format!("Fixed in {sha}.")], None).await;
         log(format!("closed GitHub issue #{g}"));
     }

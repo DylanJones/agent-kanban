@@ -757,6 +757,28 @@ async fn batch_review_and_merge_leave_parked_members_alone() {
     services::merge::merge(&env.app, &env.project, pr.number, &Actor::human("dylan"), Default::default()).await.unwrap();
     assert_eq!(issue(&env, batch.number).await.state, IssueState::Done);
     assert_eq!(issue(&env, parked.number).await.state, IssueState::Backlog);
+    // The GitHub mirror's `merged` job (queued after the local transitions) closes exactly these.
+    let closing: Vec<i64> = services::pr_closing_issues(&env.app.db, pr.id).await.unwrap().iter().map(|i| i.number).collect();
+    assert_eq!(closing, vec![batch.number]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn merge_without_force_rejects_a_pr_whose_issues_are_all_parked() {
+    let env = setup().await;
+    fake_agent(&env.app, "f-fix", "fix", "fake").await;
+    fake_agent(&env.app, "f-approve", "review_approve", "fake").await;
+    let i = new_issue(&env, "Deprioritised", IssueState::Ready).await;
+    run(&env, i.number, Role::Fix, "f-fix").await;
+    run(&env, i.number, Role::Review, "f-approve").await;
+    assert_eq!(issue(&env, i.number).await.state, IssueState::ReadyToMerge);
+    let pr = services::pulls::open_pr_for_issue(&env.app.db, i.id).await.unwrap().unwrap();
+    // A human moves the only linked issue back to backlog after approval.
+    sqlx::query("UPDATE issues SET state = 'backlog' WHERE id = ?").bind(i.id).execute(&env.app.db).await.unwrap();
+
+    let err = services::merge::merge(&env.app, &env.project, pr.number, &Actor::human("dylan"), Default::default()).await.unwrap_err();
+    assert!(format!("{err:?}").contains("parked"), "{err:?}");
+    let req = services::merge::MergeRequest { force: true, ..Default::default() };
+    services::merge::merge(&env.app, &env.project, pr.number, &Actor::human("dylan"), req).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

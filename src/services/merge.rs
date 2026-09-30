@@ -32,15 +32,7 @@ pub struct MergeResult {
 }
 
 pub async fn default_message(app: &AppState, pr_id: i64, title: &str) -> String {
-    // Parked (`backlog`) batch members stay open after the merge, so they aren't closed here either.
-    let nums: Vec<i64> = sqlx::query_scalar(
-        "SELECT i.number FROM issues i JOIN pull_request_issues pi ON pi.issue_id = i.id
-          WHERE pi.pr_id = ? AND i.state != 'backlog' ORDER BY i.number",
-    )
-    .bind(pr_id)
-    .fetch_all(&app.db)
-    .await
-    .unwrap_or_default();
+    let nums: Vec<i64> = super::pr_closing_issues(&app.db, pr_id).await.unwrap_or_default().iter().map(|i| i.number).collect();
     let mut msg = title.trim().to_string();
     if !nums.is_empty() {
         msg.push_str("\n\n");
@@ -74,6 +66,10 @@ pub async fn merge(app: &AppState, project: &Project, number: i64, actor: &Actor
         }
         if let Some(i) = issues.iter().find(|i| i.state != IssueState::ReadyToMerge && !super::is_parked(i)) {
             return Err(ApiError::conflict(format!("issue #{} is `{}`, not ready to merge", i.number, i.state.as_str())));
+        }
+        // Parked members ride along, but a PR whose issues are all parked was deliberately set aside.
+        if !issues.is_empty() && issues.iter().all(super::is_parked) {
+            return Err(ApiError::conflict("every linked issue is parked in backlog; move one to review or pass `force: true`"));
         }
     }
     if git::commits_ahead(repo, &base, &head).await.unwrap_or(0) == 0 {
@@ -163,9 +159,8 @@ pub async fn merge(app: &AppState, project: &Project, number: i64, actor: &Actor
     record_event(&mut tx, Some(project.id), None, Some(pr.id), actor, "pr.merged", json!({"sha": new, "strategy": strategy})).await?;
     tx.commit().await?;
 
-    for i in &issues {
-        let i = super::issue_by_id(&app.db, i.id).await?;
-        if !i.state.is_terminal() && !super::is_parked(&i) {
+    for i in super::pr_closing_issues(&app.db, pr.id).await? {
+        if !i.state.is_terminal() {
             super::issues::set_state(app, project, &i, IssueState::Done, actor, Some(&format!("Merged via PR #{number}.")), None).await?;
         }
     }
