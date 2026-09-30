@@ -38,7 +38,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { Outlet, useNavigate, useParams, useSearchParams } from "react-router";
+import { Link, Outlet, useNavigate, useParams, useSearchParams } from "react-router";
 import { type Card as CardT, COLUMN_STATES, type IssueState, ROLE_LABEL, type Role, STATE_LABEL, api, client, unwrap } from "../api/client";
 import { useConnectClaude } from "../components/ConnectClaude";
 import { ImageTextarea } from "../components/ImageTextarea";
@@ -378,7 +378,15 @@ function DispatchBanner({ board, spotlight, setSpotlight, onOpen }: { board: Non
       </div>
     );
   }
-  const slots = Math.max(0, board.max_concurrent_runs - board.active_runs);
+  const start = board.startable;
+  // Limits that are full and hold back queued work, in the order the scheduler checks them.
+  const full = board.capacity.filter((l) => l.queued > 0 && l.active >= l.max);
+  const reasons = (full.some((l) => l.kind === "global") ? full.filter((l) => l.kind === "global") : full).map((l) => {
+    const n = `${l.active}/${l.max} running`;
+    if (l.kind === "global") return { key: "global", text: `All agent slots in use: ${n}`, to: "/agents", fix: "Raise the global limit" };
+    if (l.kind === "project") return { key: "project", text: `This project is at its limit: ${n}`, to: `/p/${board.project.slug}/settings`, fix: "Project settings" };
+    return { key: `agent-${l.agent}`, text: `${l.agent} is at its limit: ${n}`, to: "/agents", fix: `Edit ${l.agent}` };
+  });
   return (
     <Banner
       tone={board.scheduler_enabled ? "accent" : "neutral"}
@@ -393,12 +401,12 @@ function DispatchBanner({ board, spotlight, setSpotlight, onOpen }: { board: Non
         <span>
           {board.scheduler_enabled ? (
             <>
-              <b>{queued.length}</b> issue{queued.length > 1 ? "s" : ""} queued for agents ({slots} free slot{slots === 1 ? "" : "s"})
+              <b>{queued.length}</b> issue{queued.length > 1 ? "s" : ""} queued for agents{start > 0 ? ` (${start} can start now)` : ""}
             </>
           ) : (
             <>
               Scheduler is off. Turning it on starts agents on <b>{queued.length}</b> issue{queued.length > 1 ? "s" : ""}
-              {queued.length > board.max_concurrent_runs ? ` (${board.max_concurrent_runs} at a time)` : ""}
+              {start < queued.length ? ` (${start} right away)` : ""}
             </>
           )}
         </span>
@@ -414,6 +422,19 @@ function DispatchBanner({ board, spotlight, setSpotlight, onOpen }: { board: Non
         ))}
         {queued.length > 8 && <span className="text-xs text-fg-subtle">+{queued.length - 8} more</span>}
       </div>
+      {reasons.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-muted">
+          <span>Waiting because:</span>
+          {reasons.map((r) => (
+            <span key={r.key} className="inline-flex flex-wrap items-center gap-x-1.5">
+              <span className="font-medium text-fg">{r.text}</span>
+              <Link to={r.to} className="text-accent-fg underline-offset-2 hover:underline">
+                {r.fix} →
+              </Link>
+            </span>
+          ))}
+        </div>
+      )}
     </Banner>
   );
 }

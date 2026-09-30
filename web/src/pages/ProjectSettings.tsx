@@ -183,7 +183,7 @@ export default function ProjectSettings() {
             <Field label="Commit message regex" hint="Enforced on merge commits and PR titles. Emojicode: ^\p{Extended_Pictographic}">
               <input className={clsx(inputCls, "font-mono")} {...str("commit_msg_regex")} />
             </Field>
-            <Field label="Max concurrent runs in this project" hint="Blank = only the global limit">
+            <Field label="Max concurrent runs in this project" hint="Blank = no project limit. The global and per-agent limits still apply.">
               <input type="number" className={inputCls} defaultValue={p.data.max_concurrent_runs ?? ""} onBlur={(e) => save.mutate({ max_concurrent_runs: Number(e.target.value || 0) })} />
             </Field>
           </div>

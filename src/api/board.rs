@@ -85,6 +85,25 @@ pub struct Board {
     pub scheduler_enabled: bool,
     /// Cards the scheduler would start an agent on now (`next.kind == "agent"`), in dispatch order.
     pub dispatchable: Vec<i64>,
+    /// The concurrency limits that apply to `dispatchable`: the global limit, this project's limit (if
+    /// set), and each agent the queued cards need. Counted the same way the scheduler counts them.
+    pub capacity: Vec<CapacityLimit>,
+    /// How many of `dispatchable` could start right now once every limit in `capacity` is applied.
+    pub startable: i64,
+}
+
+/// One concurrency limit and how full it is.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CapacityLimit {
+    /// `global` (all projects and agents) · `project` (this project) · `agent` (one agent, across projects and roles).
+    pub kind: String,
+    /// The agent's slug, for `kind == "agent"`.
+    pub agent: Option<String>,
+    /// Active (queued, preparing or running) runs counted against this limit.
+    pub active: i64,
+    pub max: i64,
+    /// Cards in `dispatchable` this limit applies to.
+    pub queued: i64,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -198,7 +217,7 @@ pub async fn board(
     let limit_groups = sqlx::query_as::<_, LimitGroup>("SELECT * FROM limit_groups ORDER BY name").fetch_all(&app.db).await?;
     let avail = crate::orchestrator::scheduler::role_availability(&app, &project).await?;
     let now = crate::db::now();
-    let mut dispatchable: Vec<(i32, i32, f64, i64)> = vec![];
+    let mut dispatchable: Vec<(i32, i32, f64, i64, String)> = vec![];
 
     let like = q.q.as_ref().map(|s| s.to_lowercase());
     let mut cols: Vec<BoardColumn> =
@@ -247,7 +266,7 @@ pub async fn board(
                 Some("P2") => 2,
                 _ => 3,
             };
-            dispatchable.push((prio, i.state.precedence(), i.rank, i.number));
+            dispatchable.push((prio, i.state.precedence(), i.rank, i.number, next.agent.clone().unwrap_or_default()));
         }
         let col = i.state.column();
         let card = Card {
@@ -285,17 +304,77 @@ pub async fn board(
     let labels = services::labels::project_labels(&app.db, project.id).await?;
     let active_runs: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM agent_runs WHERE status IN ('queued','preparing','running')").fetch_one(&app.db).await?;
+    let max_concurrent_runs = crate::db::get_setting(&app.db, "max_concurrent_runs").await.unwrap_or(3);
+    dispatchable.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal)));
+    let (capacity, startable) = capacity(&app, &project, active_runs, max_concurrent_runs, &dispatchable).await?;
     Ok(Json(Board {
         project,
         columns: cols,
         labels,
         limit_groups,
         active_runs,
-        max_concurrent_runs: crate::db::get_setting(&app.db, "max_concurrent_runs").await.unwrap_or(3),
+        max_concurrent_runs,
         scheduler_enabled: crate::db::get_setting(&app.db, "scheduler_enabled").await.unwrap_or(false),
-        dispatchable: {
-            dispatchable.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal)));
-            dispatchable.into_iter().map(|d| d.3).collect()
-        },
+        dispatchable: dispatchable.into_iter().map(|d| d.3).collect(),
+        capacity,
+        startable,
     }))
+}
+
+/// The limits `scheduler::tick` checks before starting each queued card, and how many of the cards
+/// (in dispatch order) would get past all of them right now.
+async fn capacity(
+    app: &AppState,
+    project: &Project,
+    active_runs: i64,
+    max_concurrent_runs: i64,
+    queue: &[(i32, i32, f64, i64, String)],
+) -> ApiResult<(Vec<CapacityLimit>, i64)> {
+    let queued = queue.len() as i64;
+    let mut limits = vec![CapacityLimit { kind: "global".into(), agent: None, active: active_runs, max: max_concurrent_runs, queued }];
+    if let Some(cap) = project.max_concurrent_runs {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_runs WHERE project_id = ? AND status IN ('queued','preparing','running')")
+            .bind(project.id)
+            .fetch_one(&app.db)
+            .await?;
+        limits.push(CapacityLimit { kind: "project".into(), agent: None, active: n, max: cap, queued });
+    }
+    let mut slugs: Vec<&str> = queue.iter().map(|q| q.4.as_str()).collect();
+    slugs.sort();
+    slugs.dedup();
+    for slug in slugs {
+        let row: Option<(i64, i64)> = sqlx::query_as(
+            "SELECT a.max_concurrent, (SELECT COUNT(*) FROM agent_runs r WHERE r.agent_definition_id = a.id AND r.status IN ('queued','preparing','running'))
+               FROM agent_definitions a WHERE a.slug = ?",
+        )
+        .bind(slug)
+        .fetch_optional(&app.db)
+        .await?;
+        if let Some((max, active)) = row {
+            let queued = queue.iter().filter(|q| q.4 == slug).count() as i64;
+            limits.push(CapacityLimit { kind: "agent".into(), agent: Some(slug.into()), active, max, queued });
+        }
+    }
+
+    // Walk the queue like the scheduler does: stop when the global limit is reached, skip cards
+    // whose project or agent is at its limit.
+    let mut free: HashMap<(&str, Option<&str>), i64> =
+        limits.iter().map(|l| ((l.kind.as_str(), l.agent.as_deref()), (l.max - l.active).max(0))).collect();
+    let mut startable = 0;
+    for q in queue {
+        if free[&("global", None)] == 0 {
+            break;
+        }
+        let keys = [("project", None), ("agent", Some(q.4.as_str()))];
+        if keys.iter().any(|k| free.get(k) == Some(&0)) {
+            continue;
+        }
+        for k in keys.iter().chain([&("global", None)]) {
+            if let Some(n) = free.get_mut(k) {
+                *n -= 1;
+            }
+        }
+        startable += 1;
+    }
+    Ok((limits, startable))
 }

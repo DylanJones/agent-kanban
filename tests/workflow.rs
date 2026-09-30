@@ -254,6 +254,65 @@ async fn scheduler_respects_concurrency_and_priority() {
     }
 }
 
+async fn board(env: &Env) -> agent_kanban::api::board::Board {
+    use axum::extract::{Path, Query, State};
+    let q = agent_kanban::api::board::BoardQuery { label: None, badge: None, agent: None, running: None, q: None, done_days: None };
+    agent_kanban::api::board::board(State(env.app.clone()), Actor::human("t"), Path("demo".into()), Query(q)).await.unwrap().0
+}
+
+fn limit<'a>(b: &'a agent_kanban::api::board::Board, kind: &str) -> &'a agent_kanban::api::board::CapacityLimit {
+    b.capacity.iter().find(|l| l.kind == kind).unwrap_or_else(|| panic!("no {kind} limit"))
+}
+
+/// Issue #40: a queue held back by an agent's own cap, not the global one, must say so.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn board_explains_which_limit_holds_the_queue() {
+    let env = setup().await;
+    fake_agent(&env.app, "f-hang", "hang", "fake").await;
+    sqlx::query("UPDATE agent_definitions SET max_concurrent = 2 WHERE slug = 'f-hang'").execute(&env.app.db).await.unwrap();
+    sqlx::query("INSERT OR REPLACE INTO project_role_agents(project_id, role, agent_definition_id) SELECT ?, 'fix', id FROM agent_definitions WHERE slug = 'f-hang'")
+        .bind(env.project.id)
+        .execute(&env.app.db)
+        .await
+        .unwrap();
+    agent_kanban::db::set_setting(&env.app.db, "max_concurrent_runs", &10).await.unwrap();
+    for n in 0..5 {
+        new_issue(&env, &format!("q{n}"), IssueState::Ready).await;
+    }
+
+    let b = board(&env).await;
+    assert_eq!(b.dispatchable.len(), 5);
+    assert_eq!(b.startable, 2, "only the agent's 2 slots are usable, not the 10 global ones");
+    let a = limit(&b, "agent");
+    assert_eq!((a.agent.as_deref(), a.active, a.max, a.queued), (Some("f-hang"), 0, 2, 5));
+    assert!(b.capacity.iter().all(|l| l.kind != "project"), "no project cap set");
+
+    scheduler::tick(&env.app).await.unwrap();
+    let b = board(&env).await;
+    assert_eq!(b.dispatchable.len(), 3);
+    assert_eq!(b.startable, 0);
+    assert_eq!((limit(&b, "global").active, limit(&b, "global").max), (2, 10));
+    let a = limit(&b, "agent");
+    assert_eq!((a.active, a.max, a.queued), (2, 2, 3), "the agent is the saturated limit");
+
+    // A project cap is reported and applied too.
+    sqlx::query("UPDATE agent_definitions SET max_concurrent = 10 WHERE slug = 'f-hang'").execute(&env.app.db).await.unwrap();
+    sqlx::query("UPDATE projects SET max_concurrent_runs = 3 WHERE id = ?").bind(env.project.id).execute(&env.app.db).await.unwrap();
+    let b = board(&env).await;
+    let p = limit(&b, "project");
+    assert_eq!((p.active, p.max, p.queued), (2, 3, 3));
+    assert_eq!(b.startable, 1, "the project cap leaves one slot");
+    scheduler::tick(&env.app).await.unwrap();
+    let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_runs WHERE status IN ('queued','preparing','running')")
+        .fetch_one(&env.app.db)
+        .await
+        .unwrap();
+    assert_eq!(active, 3, "the scheduler agrees with the board");
+    for id in env.app.runs.live_ids() {
+        env.app.runs.cancel_and_wait(id, "test done", std::time::Duration::from_secs(10)).await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn decision_request_holds_until_answered() {
     let env = setup().await;
