@@ -86,7 +86,7 @@ async fn seed_defaults(db: &Db) -> anyhow::Result<()> {
             "Claude Code",
             "claude",
             "npx",
-            serde_json::json!(["-y", "@agentclientprotocol/claude-agent-acp"]),
+            serde_json::json!(["-y", "@agentclientprotocol/claude-agent-acp@latest"]),
             serde_json::json!({}),
             Some("auto"),
             Some("bypassPermissions"),
@@ -96,7 +96,7 @@ async fn seed_defaults(db: &Db) -> anyhow::Result<()> {
             "Codex",
             "codex",
             "npx",
-            serde_json::json!(["-y", "@agentclientprotocol/codex-acp"]),
+            serde_json::json!(["-y", "@agentclientprotocol/codex-acp@latest"]),
             serde_json::json!({"CODEX_CONFIG": codex_host_config, "INITIAL_AGENT_MODE": "agent", "NO_BROWSER": "1"}),
             Some("agent"),
             Some("agent-full-access"),
@@ -132,6 +132,15 @@ async fn seed_defaults(db: &Db) -> anyhow::Result<()> {
         .execute(db)
         .await?;
         sqlx::query("INSERT OR IGNORE INTO limit_groups(name, updated_at) VALUES (?, ?)").bind(*harness).bind(&now).execute(db).await?;
+    }
+    // Without a version, `npx -y` keeps running whatever copy is already installed or cached, so
+    // new adapter releases (and the models they add) never arrive. Upgrade the old unedited defaults.
+    for pkg in ["@agentclientprotocol/claude-agent-acp", "@agentclientprotocol/codex-acp"] {
+        sqlx::query("UPDATE agent_definitions SET args = ? WHERE args = ?")
+            .bind(serde_json::json!(["-y", format!("{pkg}@latest")]).to_string())
+            .bind(serde_json::json!(["-y", pkg]).to_string())
+            .execute(db)
+            .await?;
     }
     Ok(())
 }
