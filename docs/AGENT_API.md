@@ -168,6 +168,10 @@ curl -sS -X POST "$AKB_API/projects/$P/pulls/N/reviews" "${H[@]}" -H 'Content-Ty
 | `needs_decision` | issue paused for a human; `body` must hold the question, options and consequences |
 | `comment` | no state change |
 
+A PR can link several issues (a batch). The verdict moves every linked issue, except members a
+human parked in `backlog`: those are left untouched (the summary lists them), and on merge they stay in
+`backlog` rather than being closed. Your own issue must still be `in_review`.
+
 If the head moved since you started, you get a 409 — re-review the new commits with `diff?since=`.
 
 ## Errors

@@ -32,7 +32,15 @@ pub struct MergeResult {
 }
 
 pub async fn default_message(app: &AppState, pr_id: i64, title: &str) -> String {
-    let nums = pulls::linked_issue_numbers(&app.db, pr_id).await.unwrap_or_default();
+    // Parked (`backlog`) batch members stay open after the merge, so they aren't closed here either.
+    let nums: Vec<i64> = sqlx::query_scalar(
+        "SELECT i.number FROM issues i JOIN pull_request_issues pi ON pi.issue_id = i.id
+          WHERE pi.pr_id = ? AND i.state != 'backlog' ORDER BY i.number",
+    )
+    .bind(pr_id)
+    .fetch_all(&app.db)
+    .await
+    .unwrap_or_default();
     let mut msg = title.trim().to_string();
     if !nums.is_empty() {
         msg.push_str("\n\n");
@@ -64,7 +72,7 @@ pub async fn merge(app: &AppState, project: &Project, number: i64, actor: &Actor
         if pr.approved_sha.as_deref() != Some(head.as_str()) {
             return Err(ApiError::conflict("no approving review at the current head; review first or pass `force: true`"));
         }
-        if let Some(i) = issues.iter().find(|i| i.state != IssueState::ReadyToMerge) {
+        if let Some(i) = issues.iter().find(|i| i.state != IssueState::ReadyToMerge && !super::is_parked(i)) {
             return Err(ApiError::conflict(format!("issue #{} is `{}`, not ready to merge", i.number, i.state.as_str())));
         }
     }
@@ -157,7 +165,7 @@ pub async fn merge(app: &AppState, project: &Project, number: i64, actor: &Actor
 
     for i in &issues {
         let i = super::issue_by_id(&app.db, i.id).await?;
-        if !i.state.is_terminal() {
+        if !i.state.is_terminal() && !super::is_parked(&i) {
             super::issues::set_state(app, project, &i, IssueState::Done, actor, Some(&format!("Merged via PR #{number}.")), None).await?;
         }
     }

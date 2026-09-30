@@ -14,8 +14,8 @@ use serde_json::Value;
 use sqlx::SqliteConnection;
 
 use crate::db::{self, Db};
-use crate::domain::Actor;
 use crate::domain::models::{Issue, Project, PullRequest};
+use crate::domain::{Actor, IssueState};
 use crate::error::{ApiError, ApiResult};
 
 pub async fn record_event(
@@ -109,6 +109,12 @@ pub fn ensure_issue_access(actor: &Actor, issue: &Issue) -> ApiResult<()> {
 /// Issues linked to a PR.
 pub async fn pr_issue_ids(db: &Db, pr_id: i64) -> sqlx::Result<Vec<i64>> {
     sqlx::query_scalar("SELECT issue_id FROM pull_request_issues WHERE pr_id = ?").bind(pr_id).fetch_all(db).await
+}
+
+/// A PR linked to several issues (a "batch") may carry members a human deliberately parked in
+/// `backlog`. Review verdicts and merges leave those alone instead of requiring them in lockstep.
+pub fn is_parked(issue: &Issue) -> bool {
+    issue.state == IssueState::Backlog
 }
 
 /// Agents may act on a PR if it is linked to their bound issue.
