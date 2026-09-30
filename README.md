@@ -125,8 +125,8 @@ under **Agents**:
 
 | Agent | Command | Modes used |
 |---|---|---|
-| Claude Code | `npx -y @agentclientprotocol/claude-agent-acp` | `auto` on host, `bypassPermissions` in containers |
-| Codex | `npx -y @agentclientprotocol/codex-acp` | `agent` on host (network + repo `.git` writable), `agent-full-access` in containers |
+| Claude Code | `npx -y @agentclientprotocol/claude-agent-acp@latest` | `auto` on host, `bypassPermissions` in containers |
+| Codex | `npx -y @agentclientprotocol/codex-acp@latest` | `agent` on host (network + repo `.git` writable), `agent-full-access` in containers |
 | OpenCode | `opencode acp` | default |
 
 Each run gets:
