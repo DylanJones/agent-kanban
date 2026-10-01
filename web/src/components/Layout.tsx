@@ -341,11 +341,16 @@ const TOAST_ICON: Record<string, [typeof CheckCircle2, string]> = {
   rate_limited: [PauseCircle, "text-amber-500"],
 };
 
+/** How many run toasts show at once; any beyond that collapse into a "+N more" link to the runs page. */
+export const MAX_TOASTS = 3;
+const TOAST_MS = 10000;
+
 /** Pops a toast when an agent run finishes, and shows the running count in the tab title. */
-function RunToasts() {
+export function RunToasts() {
   const runs = useActiveRuns();
   const prev = useRef<Set<number> | null>(null);
   const [toasts, setToasts] = useState<RunView[]>([]);
+  const dismiss = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
   useEffect(() => {
     if (!runs.data) return;
     const now = new Set(runs.data.map((r) => r.id));
@@ -355,13 +360,13 @@ function RunToasts() {
     for (const id of gone) {
       unwrap(client.GET("/api/runs/{id}", { params: { path: { id } } })).then((r) => {
         setToasts((t) => [...t, r]);
-        setTimeout(() => setToasts((t) => t.filter((x) => x.id !== r.id)), 10000);
+        setTimeout(() => dismiss(r.id), TOAST_MS);
         if (document.hidden && "Notification" in window && Notification.permission === "granted") {
           new Notification(`${ROLE_LABEL[r.role]} run ${r.status.replace("_", " ")}`, { body: `#${r.issue} ${r.issue_title ?? ""}` });
         }
       });
     }
-  }, [runs.data]);
+  }, [runs.data, dismiss]);
   useEffect(() => {
     if ("Notification" in window && Notification.permission === "default") {
       const ask = () => Notification.requestPermission();
@@ -369,27 +374,53 @@ function RunToasts() {
       return () => window.removeEventListener("click", ask);
     }
   }, []);
+  const shown = toasts.slice(-MAX_TOASTS);
+  const more = toasts.length - shown.length;
+  // Phones: a short stack under the status bar, clear of the bottom tab bar. Desktop: bottom-right.
+  // z-40 keeps it above the issue drawer (rendered earlier) but under the menu drawer and dialogs (z-50),
+  // so it never covers or intercepts their controls.
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-[calc(4.25rem+env(safe-area-inset-bottom))] z-50 flex flex-col items-center gap-2 px-3 lg:inset-x-auto lg:right-5 lg:bottom-5 lg:items-end">
-      {toasts.map((r) => {
+    <div
+      role="status"
+      aria-label="Run notifications"
+      className="pointer-events-none fixed inset-x-0 top-[calc(0.5rem+env(safe-area-inset-top))] z-40 flex flex-col items-center gap-2 px-3 lg:inset-x-auto lg:top-auto lg:right-5 lg:bottom-5 lg:items-end"
+    >
+      {more > 0 && (
+        <Link
+          to="/runs"
+          onClick={() => setToasts([])}
+          className="pointer-events-auto animate-pop-in rounded-full border border-line bg-surface/95 px-3 py-1 text-xs font-medium text-fg-muted shadow-overlay backdrop-blur-xl hover:text-fg"
+        >
+          +{more} more {more === 1 ? "run" : "runs"} finished
+        </Link>
+      )}
+      {shown.map((r) => {
         const [Icon, color] = TOAST_ICON[r.status] ?? [CircleSlash, "text-fg-subtle"];
         return (
-          <Link
+          <div
             key={r.id}
-            to={`/runs/${r.id}`}
-            className="pointer-events-auto flex w-full max-w-sm animate-pop-in items-start gap-3 rounded-2xl border border-line bg-surface/95 p-3 shadow-overlay backdrop-blur-xl transition-transform hover:-translate-y-0.5"
+            className="pointer-events-auto flex w-full max-w-sm animate-pop-in items-start rounded-2xl border border-line bg-surface/95 shadow-overlay backdrop-blur-xl transition-transform hover:-translate-y-0.5"
           >
-            <Icon size={20} className={clsx("mt-0.5 shrink-0", color)} />
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium">
-                {ROLE_LABEL[r.role]} run {r.status.replace("_", " ")}
+            <Link to={`/runs/${r.id}`} onClick={() => dismiss(r.id)} className="flex min-w-0 flex-1 items-start gap-3 p-3 pr-1">
+              <Icon size={20} className={clsx("mt-0.5 shrink-0", color)} />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium">
+                  {ROLE_LABEL[r.role]} run {r.status.replace("_", " ")}
+                </div>
+                <div className="truncate text-xs text-fg-muted">
+                  #{r.issue} {r.issue_title} · {r.agent}
+                </div>
+                {r.error && <div className="mt-0.5 truncate text-xs text-rose-600 dark:text-rose-400">{r.error}</div>}
               </div>
-              <div className="truncate text-xs text-fg-muted">
-                #{r.issue} {r.issue_title} · {r.agent}
-              </div>
-              {r.error && <div className="mt-0.5 truncate text-xs text-rose-600 dark:text-rose-400">{r.error}</div>}
-            </div>
-          </Link>
+            </Link>
+            <button
+              onClick={() => dismiss(r.id)}
+              className="m-1.5 grid h-8 w-8 shrink-0 place-items-center rounded-full text-fg-subtle hover:bg-surface-2 hover:text-fg"
+              aria-label={`Dismiss run #${r.id} notification`}
+            >
+              <X size={15} />
+            </button>
+          </div>
         );
       })}
     </div>
